@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "umlib": {
+      "command": "uv",
+      "args": ["run", "umlib-mcp"],
+      "env": {
+        "UMLIB_EMAIL": "${UMLIB_EMAIL:-}"
+      }
+    }
+  }
+}

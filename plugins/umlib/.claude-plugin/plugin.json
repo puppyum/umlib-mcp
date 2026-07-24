@@ -1,0 +1,5 @@
+{
+  "name": "umlib",
+  "version": "0.1.0",
+  "description": "Fetch article PDFs via your own U-M library session (EZproxy): MCP server + usage skill"
+}

@@ -1,0 +1,35 @@
+[project]
+name = "umlib-mcp"
+version = "0.1.0"
+description = "MCP server that fetches licensed library PDFs through your own university EZproxy session (University of Michigan defaults)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Luna" }]
+dependencies = [
+    "mcp>=1.2,<2",
+    "playwright>=1.49,<2",
+    "httpx>=0.28,<1",
+]
+
+[project.urls]
+Repository = "https://github.com/puppyum/umlib-mcp"
+
+[project.scripts]
+umlib-mcp = "umlib_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.ruff.lint]
+# Broad except-clauses around publisher-page automation are intentional
+# boundaries, so the blind-except/S-series rules stay out of the select.
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "SIM", "C4"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/umlib_mcp"]

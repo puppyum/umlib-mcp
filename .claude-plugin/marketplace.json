@@ -1,0 +1,13 @@
+{
+  "name": "umlib-lab",
+  "owner": { "name": "Luna" },
+  "description": "Library access tools for the lab: fetch paper PDFs through your own university EZproxy session.",
+  "plugins": [
+    {
+      "name": "umlib",
+      "source": "./plugins/umlib",
+      "description": "Fetch article PDFs via your own U-M library session (EZproxy)",
+      "version": "0.1.0"
+    }
+  ]
+}
