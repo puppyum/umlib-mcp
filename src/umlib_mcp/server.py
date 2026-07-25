@@ -115,6 +115,11 @@ async def auth_status(live_check: bool = True, wait_for_login: bool = True) -> d
                 info["authenticated"] = False
                 info["check_failed"] = True
                 info["error"] = _safe(e)
+    else:
+        # say so explicitly rather than leaving the key absent, which reads
+        # as "not signed in" to anything doing a plain .get()
+        info["authenticated"] = None
+        info["note"] = "not checked (live_check=False); ask again to probe the proxy"
     return info
 
 
