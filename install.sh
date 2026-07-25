@@ -85,7 +85,15 @@ register_json() {
     return
   fi
 
-  [ -f "$file" ] && cp "$file" "$file.bak-$STAMP"
+  # an unwritable or unreadable config must skip this agent, not kill the run
+  if [ -f "$file" ] && ! cp -p "$file" "$file.bak-$STAMP" 2>/dev/null; then
+    SKIPPED+=("$label (could not back up its config, left untouched)")
+    return
+  fi
+  if ! : >>"$file" 2>/dev/null; then
+    SKIPPED+=("$label (config not writable, left untouched)")
+    return
+  fi
   # a broken config for one agent must not abort the whole install
   if ! BIN="$BIN" FILE="$file" KEY="$key" WANT_TYPE="$want_type" NAME="$NAME" \
     uv run --no-project python - <<'PY'
@@ -152,10 +160,12 @@ fi
 if command -v gemini >/dev/null 2>&1; then
   if [ "$DRY_RUN" = 1 ]; then
     say "would run: gemini mcp add -s user $NAME $BIN"
+    REGISTERED+=("Gemini CLI")
+  elif gemini mcp add -s user "$NAME" "$BIN" >/dev/null 2>&1; then
+    say "registered with Gemini CLI"; REGISTERED+=("Gemini CLI")
   else
-    gemini mcp add -s user "$NAME" "$BIN" >/dev/null 2>&1 && say "registered with Gemini CLI"
+    SKIPPED+=("Gemini CLI (registration failed)")
   fi
-  REGISTERED+=("Gemini CLI")
 elif [ -f "$HOME/.gemini/settings.json" ]; then
   register_json "Gemini CLI" "$HOME/.gemini/settings.json" "mcpServers" 0
 else
