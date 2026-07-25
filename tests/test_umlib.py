@@ -969,3 +969,82 @@ def test_browser_ready_never_raises(monkeypatch, tmp_path):
     (tmp_path / "yes" / "chromium-1234").mkdir()
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path / "yes"))
     assert browser.browser_ready() is True
+
+
+def test_download_progress_is_parsed_and_reported(monkeypatch):
+    """The first run pulls ~150MB. Without progress the sign-in window simply
+    does not appear for a minute, with nothing said."""
+    import asyncio
+
+    class FakeStdout:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        async def read(self, _n):
+            return self._chunks.pop(0) if self._chunks else b""
+
+    class FakeProc:
+        returncode = 0
+
+        def __init__(self, chunks):
+            self.stdout = FakeStdout(chunks)
+
+        async def wait(self):
+            return 0
+
+    # what playwright actually emits: a redrawn bar, percentages repeating
+    chunks = [
+        b"Downloading Chromium 141.0 (playwright build v1228)\n",
+        b"|                    |   0% of 143.5 MiB",
+        b"|####                |  20% of 143.5 MiB",
+        b"|####                |  20% of 143.5 MiB",  # redraw, must not re-report
+        b"|##########          |  55% of 143.5 MiB",
+        b"|####################| 100% of 143.5 MiB\n",
+    ]
+
+    async def fake_exec(*a, **kw):
+        return FakeProc(chunks)
+
+    monkeypatch.setattr(browser, "browser_ready", lambda: False)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    seen = []
+
+    async def on_progress(pct, note):
+        seen.append(pct)
+
+    asyncio.run(browser.ensure_chromium(on_progress))
+    assert seen == [0, 20, 55, 100]  # monotonic, redraw collapsed
+    assert not browser._install_lock.locked()  # released even on the happy path
+
+
+def test_download_failure_surfaces_the_reason(monkeypatch):
+    import asyncio
+
+    class FakeStdout:
+        def __init__(self):
+            self._done = False
+
+        async def read(self, _n):
+            if self._done:
+                return b""
+            self._done = True
+            return b"Error: connection refused by cdn.playwright.dev"
+
+    class FakeProc:
+        returncode = 1
+
+        def __init__(self):
+            self.stdout = FakeStdout()
+
+        async def wait(self):
+            return 1
+
+    async def fake_exec(*a, **kw):
+        return FakeProc()
+
+    monkeypatch.setattr(browser, "browser_ready", lambda: False)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    with pytest.raises(RuntimeError, match="connection refused"):
+        asyncio.run(browser.ensure_chromium(None))
+    assert not browser._install_lock.locked()  # and the lock is not stranded

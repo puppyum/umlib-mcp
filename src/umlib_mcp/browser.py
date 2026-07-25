@@ -3,6 +3,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -82,6 +83,56 @@ def browser_ready() -> bool:
         return any(p.name.startswith("chromium") for p in root.iterdir())
     except OSError:
         return False
+
+
+# playwright's installer draws a progress bar; all we need out of it is the
+# percentage, wherever in the chunk it lands
+_PCT = re.compile(rb"(\d{1,3})%")
+
+
+async def ensure_chromium(on_progress=None) -> None:
+    """Download the browser if it is missing, reporting progress as it goes.
+
+    The first run pulls ~150MB before a sign-in window can appear, and with no
+    feedback that is a minute of apparently nothing happening.
+    """
+    if browser_ready():
+        return
+    # the same lock the background preinstall takes, so the two can never both
+    # be downloading at once
+    await asyncio.to_thread(_install_lock.acquire)
+    try:
+        if browser_ready():
+            return
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "playwright",
+            "install",
+            "chromium",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            stdin=asyncio.subprocess.DEVNULL,  # never share the JSON-RPC stdin
+        )
+        tail, last = b"", -1
+        try:
+            while chunk := await proc.stdout.read(512):
+                tail = (tail + chunk)[-2000:]
+                for m in _PCT.finditer(chunk):
+                    pct = int(m.group(1))
+                    # the bar redraws constantly; only report real movement
+                    if 0 <= pct <= 100 and pct > last and on_progress:
+                        last = pct
+                        await on_progress(pct, f"downloading the browser ({pct}%)")
+        finally:
+            await proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "could not download the browser: "
+                + tail.decode("utf-8", "replace").strip()[-300:]
+            )
+    finally:
+        _install_lock.release()
 
 
 def preinstall_chromium() -> None:

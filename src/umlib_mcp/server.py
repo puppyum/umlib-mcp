@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import re
 import threading
@@ -47,6 +48,18 @@ _STOPWORDS = frozenset(
         "with",
     ]
 )
+
+
+def _progress_cb(ctx):
+    """Turn an MCP Context into the plain percent callback browser.py wants,
+    so the download shows a moving bar in the client instead of silence."""
+
+    async def report(pct: int, note: str) -> None:
+        if ctx is not None:
+            with contextlib.suppress(Exception):
+                await ctx.report_progress(pct, 100, note)
+
+    return report
 
 
 def _misconfigured() -> dict | None:
@@ -138,7 +151,7 @@ async def auth_status(live_check: bool = True, wait_for_login: bool = True) -> d
 
 
 @mcp.tool()
-async def login() -> dict:
+async def login(ctx: Context | None = None) -> dict:
     """Open a real browser window for the user to sign in to the U-M library
     proxy (Okta sign-in + Okta Verify). Returns immediately while the window
     stays open.
@@ -157,6 +170,21 @@ async def login() -> dict:
     # full password + MFA sign-in against it and is then told it timed out
     if bad := _misconfigured():
         return bad
+    # On a first run the sign-in window cannot appear until ~150MB of browser
+    # has downloaded. Do it here, with progress, rather than letting the user
+    # sit in front of nothing for a minute.
+    if not browser.browser_ready():
+        try:
+            await asyncio.wait_for(
+                browser.ensure_chromium(_progress_cb(ctx)), timeout=600
+            )
+        except TimeoutError:
+            return {
+                "started": False,
+                "tell_user": "the browser is still downloading; ask again in a moment",
+            }
+        except Exception as e:
+            return {"started": False, "tell_user": _safe(e)}
     return auth.start_login()
 
 
@@ -294,6 +322,10 @@ async def fetch_pdf(
 
     if bad := _misconfigured():
         return bad
+    if not browser.browser_ready():
+        # same first-run download as login: report it rather than stalling
+        with contextlib.suppress(Exception):
+            await browser.ensure_chromium(_progress_cb(ctx))
     if auth.login_active():
         await progress(0.05, "waiting for you to finish signing in")
         # wait for the user to finish signing in rather than making them
