@@ -42,6 +42,16 @@ PDF_CANDIDATE_JS = """() => {
 }"""
 
 
+def _unproxy_host(proxied_page_url: str) -> str:
+    """EZproxy rewrites www.jstor.org to www-jstor-org.proxy.lib.umich.edu, so
+    recover the real publisher host from the page we actually landed on."""
+    host = browser.host_of(proxied_page_url)
+    suffix = "." + config.REWRITE_HOST
+    if not host.endswith(suffix):
+        return ""
+    return host[: -len(suffix)].replace("-", ".")
+
+
 def prepare_candidates(
     urls: list[str | None], page_url: str, publisher_host: str
 ) -> list[str]:
@@ -207,11 +217,18 @@ async def _fetch_via_proxy(proxied_url: str, publisher_host: str):
         if not browser.is_proxied_url(page.url):
             ratelimit.refund()  # never got past the proxy: not a licensed fetch
             if browser.host_of(page.url) == publisher_host:
+                # bounced straight back to the publisher: not in the proxy's
+                # database. (A redirector like doi.org is the ambiguous case:
+                # we land elsewhere and report needs_login, which carries the
+                # landed host so the user can see where they ended up.)
                 raise HostNotProxied(page.url)
-            raise NeedsLogin()
+            raise NeedsLogin(page.url)
 
+        # after the proxy has rewritten the URL, the real publisher host is
+        # whatever it landed on, not whatever was passed in
+        landed_host = _unproxy_host(page.url) or publisher_host
         candidates = prepare_candidates(
-            await page.evaluate(PDF_CANDIDATE_JS), page.url, publisher_host
+            await page.evaluate(PDF_CANDIDATE_JS), page.url, landed_host
         )
         for candidate in candidates:
             with contextlib.suppress(Exception):

@@ -1,3 +1,4 @@
+import re
 import threading
 
 from mcp.server.fastmcp import FastMCP
@@ -5,6 +6,55 @@ from mcp.server.fastmcp import FastMCP
 from . import auth, browser, config, fetch, oa, ratelimit
 
 mcp = FastMCP("umlib")
+
+_STOPWORDS = frozenset(
+    [
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "how",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "to",
+        "via",
+        "with",
+    ]
+)
+
+
+def _words(text: str) -> set[str]:
+    # keep two-letter tokens: "AI", "ML" and "UX" are real search terms
+    return {
+        w
+        for w in re.findall(r"[a-z0-9]+", text.lower())
+        if len(w) > 1 and w not in _STOPWORDS
+    }
+
+
+def _plausible_match(query: str, title: str | None) -> bool:
+    """A title search should not return a confident answer for a query the
+    result shares no meaningful words with. A query with nothing meaningful in
+    it (all stopwords) cannot be judged, so it passes through and the caller
+    gets the usual confirm-the-match note."""
+    if not title:
+        return False
+    asked, got = _words(query), _words(title)
+    if not asked:
+        return True
+    return len(asked & got) >= max(1, min(2, len(asked) // 3))
 
 
 @mcp.tool()
@@ -113,6 +163,17 @@ async def resolve(query: str) -> dict:
                 "query": query,
                 "message": "the closest match has no DOI; try a more specific title",
             }
+        # Crossref always returns its nearest record, however poor. Without a
+        # sanity check a nonsense query comes back as a confident match, so
+        # require the result to share real words with what was asked for.
+        if not _plausible_match(query, meta.get("title")):
+            return {
+                "status": "error",
+                "code": "no_matches",
+                "query": query,
+                "closest_title": meta.get("title"),
+                "message": "nothing matched that closely; check the title or pass a DOI",
+            }
     result = {"status": "ok", **meta}
     oa_info = await oa.open_access(doi)
     result["open_access"] = oa_info or {"is_oa": None, "note": "check skipped"}
@@ -159,13 +220,14 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
             }
 
     meta = {}
-    if doi_or_url.startswith(("http://", "https://")):
-        if not config.is_web_url(doi_or_url):
-            return {
-                "status": "error",
-                "code": "bad_input",
-                "message": "only http(s) URLs are supported",
-            }
+    looks_like_url = "://" in doi_or_url
+    if looks_like_url and not config.is_web_url(doi_or_url):
+        return {
+            "status": "error",
+            "code": "bad_input",
+            "message": "only http(s) URLs are supported",
+        }
+    if looks_like_url:  # is_web_url is case-insensitive, so HTTPS:// works too
         doi = oa.extract_doi(doi_or_url)
         publisher_url = doi_or_url
     else:
@@ -213,13 +275,16 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
 
     try:
         data, used = await fetch.fetch_licensed(publisher_url)
-    except auth.NeedsLogin:
-        return {
+    except auth.NeedsLogin as e:
+        out = {
             "status": "error",
             "code": "needs_login",
             "manual_url": config.proxied(publisher_url),
             "message": "no active library session; run the login tool, then retry",
         }
+        if e.landed_url:
+            out["landed_on"] = e.landed_url
+        return out
     except ratelimit.RateLimited as e:
         return {
             "status": "error",
@@ -279,7 +344,7 @@ def proxy_url(url: str) -> dict:
             "code": "bad_input",
             "message": "only http(s) URLs can be proxied",
         }
-    return {"proxied_url": config.proxied(url)}
+    return {"status": "ok", "proxied_url": config.proxied(url)}
 
 
 def main() -> None:

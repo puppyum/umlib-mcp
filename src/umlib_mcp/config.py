@@ -46,7 +46,19 @@ def _path(key: str, default: str) -> Path:
 # EZproxy prefix. U-M documents this exact pattern as the supported public
 # interface ("Create Links that Work"). Override for other institutions.
 PROXY_BASE = setting("proxy_base", "https://proxy.lib.umich.edu/login?url=")
-PROXY_HOST = urlparse(PROXY_BASE).hostname or "proxy.lib.umich.edu"
+PROXY_HOST = urlparse(PROXY_BASE).hostname or ""
+if not PROXY_HOST:  # a malformed proxy_base must not silently fall back to U-M
+    raise ValueError(
+        f"proxy_base has no hostname: {PROXY_BASE!r}. "
+        "It should look like https://proxy.your-school.edu/login?url="
+    )
+
+# EZproxy rewrites a licensed site onto a subdomain of the proxy host
+# (www-jstor-org.proxy.lib.umich.edu). Some institutions serve the login page
+# and the rewritten hosts from different domains, so allow the rewrite domain
+# to be set independently; it defaults to the proxy host, which is the common
+# single-domain case.
+REWRITE_HOST = setting("rewrite_host", PROXY_HOST)
 
 PROFILE_DIR = _path("profile_dir", "~/.umlib/profile")
 DOWNLOAD_DIR = _path("download_dir", "~/Downloads")
@@ -77,6 +89,9 @@ MIN_FETCH_INTERVAL_S = setting("min_fetch_interval_s", 5.0, float)
 MAX_PDF_BYTES = setting("max_pdf_bytes", 100 * 1024 * 1024, int)
 
 LOGIN_TIMEOUT_S = setting("login_timeout_s", 300, int)
+# The interactive login holds the browser profile for its whole window, so a
+# fetch queued behind it has to be willing to wait at least that long.
+LOCK_TIMEOUT_S = setting("lock_timeout_s", LOGIN_TIMEOUT_S + 60, float)
 # How long a fetch will sit waiting for an in-flight sign-in before giving up
 # and asking the user to retry.
 LOGIN_WAIT_S = setting("login_wait_s", 150.0, float)
@@ -89,14 +104,23 @@ USER_AGENT = f"umlib-mcp/0.1 (mailto:{EMAIL})" if EMAIL else "umlib-mcp/0.1"
 
 def is_web_url(url: str) -> bool:
     """Only http(s) targets are ever proxied or fetched; blocks file:, data:,
-    javascript:, etc. from reaching the browser or an httpx client."""
+    javascript:, etc. from reaching the browser or an httpx client. Schemes are
+    case-insensitive, so HTTPS:// is a URL, not a DOI."""
     try:
-        return urlparse(url).scheme in ("http", "https")
+        return urlparse(url).scheme.lower() in ("http", "https")
     except ValueError:
         return False
 
 
+def already_proxied(url: str) -> bool:
+    return urlparse(url).hostname == PROXY_HOST or (
+        urlparse(url).hostname or ""
+    ).endswith("." + REWRITE_HOST)
+
+
 def proxied(url: str) -> str:
+    if already_proxied(url):
+        return url  # don't wrap a proxy URL in another proxy URL
     # The target goes in raw, exactly as the library documents it. Do not be
     # tempted to percent-encode it: EZproxy reads everything after url=
     # literally and does its own encoding downstream, so an encoded target

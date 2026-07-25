@@ -102,10 +102,11 @@ def _lock_path():
     return config.PROFILE_DIR.parent / "umlib.lock"
 
 
-def _acquire_file_lock(timeout: float = 120.0):
+def _acquire_file_lock(timeout: float | None = None):
     """Chromium cannot share one profile between processes, and several agents
     may each be running their own copy of this server. A lock file makes them
     take turns instead of corrupting the profile."""
+    timeout = config.LOCK_TIMEOUT_S if timeout is None else timeout
     _lock_path().parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
     deadline = time.monotonic() + timeout
@@ -188,6 +189,9 @@ def host_of(url: str) -> str:
 def is_proxied_url(url: str) -> bool:
     """True once EZproxy has rewritten us onto a licensed host."""
     host = host_of(url)
-    return host.endswith("." + config.PROXY_HOST) or (
-        host == config.PROXY_HOST and not urlparse(url).path.startswith("/login")
+    if host.endswith("." + config.REWRITE_HOST):
+        return True
+    # the proxy's own domain counts too, except for its login/auth pages
+    return host == config.PROXY_HOST and not urlparse(url).path.startswith(
+        ("/login", "/menu/login", "/logout")
     )

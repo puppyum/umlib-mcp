@@ -205,6 +205,55 @@ def test_malformed_config_file_does_not_crash(tmp_path, monkeypatch):
     assert config._load_file() == {}
 
 
+def test_plausible_match_rejects_unrelated_titles():
+    from umlib_mcp.server import _plausible_match as ok
+
+    assert ok(
+        "Does Transparency in Moderation Really Matter Jhaver",
+        "Does Transparency in Moderation Really Matter?",
+    )
+    assert ok("attention is all you need", "Attention Is All You Need")
+    assert not ok("zzqx nonexistent paper title 99177", "Grant Report: Something Else")
+    assert not ok("anything", None)
+    # short acronyms are real search terms and must still count
+    assert ok("AI moderation", "AI Moderation at Scale")
+    # a query with nothing meaningful in it cannot be judged, so it passes
+    assert ok("the and of for", "A Completely Different Paper About Frogs")
+
+
+def test_proxied_is_not_applied_twice():
+    once = config.proxied("https://dl.acm.org/doi/10.1/x")
+    assert config.proxied(once) == once
+    # an already-rewritten host is also left alone
+    rewritten = "https://www-jstor-org.proxy.lib.umich.edu/stable/1"
+    assert config.proxied(rewritten) == rewritten
+
+
+def test_is_web_url_is_case_insensitive():
+    assert config.is_web_url("HTTPS://dl.acm.org/x")
+    assert config.is_web_url("Http://x.org")
+    assert not config.is_web_url("FILE:///etc/passwd")
+
+
+def test_is_proxied_url_honours_a_separate_rewrite_host(monkeypatch):
+    """Some institutions serve the login page and the rewritten hosts from
+    different domains."""
+    monkeypatch.setattr(config, "PROXY_HOST", "login.lib.example.edu")
+    monkeypatch.setattr(config, "REWRITE_HOST", "ezp.example.edu")
+    assert browser.is_proxied_url("https://www-jstor-org.ezp.example.edu/stable/1")
+    assert not browser.is_proxied_url("https://login.lib.example.edu/login?url=x")
+    assert not browser.is_proxied_url("https://www.jstor.org/stable/1")
+
+
+def test_unproxy_host_recovers_the_publisher(monkeypatch):
+    monkeypatch.setattr(config, "REWRITE_HOST", "proxy.lib.umich.edu")
+    assert (
+        fetch._unproxy_host("https://dl-acm-org.proxy.lib.umich.edu/doi/10.1/x")
+        == "dl.acm.org"
+    )
+    assert fetch._unproxy_host("https://dl.acm.org/doi/10.1/x") == ""
+
+
 def test_shipped_defaults(monkeypatch):
     """With nothing configured, the shipped courtesy limits apply."""
     monkeypatch.setattr(config, "_FILE", {})

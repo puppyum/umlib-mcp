@@ -10,7 +10,9 @@ SIGN_IN = "U-M Okta sign-in and Okta Verify two-factor"
 
 
 class NeedsLogin(Exception):
-    pass
+    def __init__(self, landed_url: str = ""):
+        self.landed_url = landed_url
+        super().__init__(landed_url or "no active library session")
 
 
 _login_task: asyncio.Task | None = None
