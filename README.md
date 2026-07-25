@@ -1,6 +1,8 @@
 # umlib-mcp
 
-Let Claude read papers using your own University of Michigan library access. When you ask about a paper, it finds a free copy if one exists, and otherwise pulls the PDF through the U-M proxy using a session you signed into yourself. Your password never touches Claude or this server; only the browser session cookie is kept, on your own machine.
+Let your AI assistant read papers using your own University of Michigan library access. Ask it about a paper and it finds a free copy if one exists, or pulls the PDF through the U-M proxy with a session you signed into yourself. Your password never touches the assistant or this server. The only thing kept is the browser session cookie, on your own machine.
+
+Works with Claude Code, Codex, Cursor, VS Code, Zed, Windsurf, Gemini CLI, and Claude Desktop.
 
 ## Tools
 
@@ -13,74 +15,47 @@ Let Claude read papers using your own University of Michigan library access. Whe
 | `proxy_url` | Prefixes a URL for off-campus access. |
 | `logout` | Deletes the saved session. |
 
-Works with any MCP client: Claude Code, Codex, Cursor, VS Code (Copilot), Zed, Windsurf, Gemini CLI, and Claude Desktop.
-
 ## Install
 
-### One command, any agent
+One command installs everything and registers it with whichever agents you have:
 
 ```sh
 curl -LsSf https://raw.githubusercontent.com/puppyum/umlib-mcp/main/install.sh | bash
 ```
 
-It installs [uv](https://docs.astral.sh/uv/) if you don't have it, installs the server, and registers it with every agent it finds on your machine. Run it with `--dry-run` first if you'd like to see what it would change; it backs up any config it edits and leaves the rest alone.
+It installs [uv](https://docs.astral.sh/uv/) if you're missing it, installs the server, and writes the config for each agent it finds. Add `--dry-run` to see what it would touch before it touches anything. It backs up every file it edits.
 
-### Easiest on Claude Code or Codex: ask the agent to do it
-
-Paste this into Claude Code:
-
-> Set me up with umlib-mcp. Install uv if I don't have it, then run `claude plugin marketplace add puppyum/umlib-mcp` and `claude plugin install umlib@umlib-lab`, and log me into the library proxy.
-
-It installs the prerequisite, adds the plugin, and opens the sign-in window for you. If the tools don't show up afterwards, run `/reload-plugins` or restart Claude Code.
-
-### Or add it as a plugin
-
-Claude Code and Codex both read the same plugin marketplace, so in either one:
+Claude Code and Codex share the same plugin marketplace, so either of them can use that instead:
 
 ```
 /plugin marketplace add puppyum/umlib-mcp
 /plugin install umlib@umlib-lab
 ```
 
-There is nothing to configure. Dependencies install on first launch, the free-copy check works out of the box, and the server downloads its browser (~150 MB, once per machine) in the background as soon as it starts.
+You can also just ask: *"Set me up with umlib-mcp from puppyum/umlib-mcp, then log me into the library proxy."*
 
-### Or register it by hand
+Nothing needs configuring afterwards. Dependencies install on first launch, and the browser it drives (~150 MB, once per machine) downloads in the background while you get on with things.
 
-Install it once with `uv tool install git+https://github.com/puppyum/umlib-mcp`, then point your client at the resulting binary (`uv tool dir --bin` tells you where it landed). Every client takes the same command with no arguments; only the surrounding key differs — `mcpServers` for Cursor, Windsurf, Gemini CLI and Claude Desktop, `servers` for VS Code, `context_servers` for Zed.
-
-**Claude Desktop (manual):** Settings → Developer → Edit Config. Use an absolute path to `uvx` (find it with `which uvx`):
-
-```json
-{
-  "mcpServers": {
-    "umlib": {
-      "command": "/Users/YOU/.local/bin/uvx",
-      "args": ["--from", "git+https://github.com/puppyum/umlib-mcp@main", "umlib-mcp"]
-    }
-  }
-}
-```
+To wire it up yourself instead, run `uv tool install git+https://github.com/puppyum/umlib-mcp` and point your client at the binary that lands in `uv tool dir --bin`. It takes no arguments. Only the surrounding key changes: `mcpServers` for Cursor, Windsurf, Gemini CLI and Claude Desktop, `servers` for VS Code, `context_servers` for Zed.
 
 ## Use it
 
-Ask Claude to "log me into the library proxy", then finish the U-M Okta sign-in in the window that opens (it closes itself when done). You can ask for a paper straight away — the fetch waits for your sign-in on its own, so there's no need to report back that you've finished.
+Ask your assistant to "log me into the library proxy", then finish the U-M Okta sign-in in the window that opens. It closes itself when you're done. You can ask for a paper straight away, because the fetch waits for your sign-in on its own; there's no need to report back.
 
 - "Get the PDF for doi 10.1145/3411764.3445642 and summarize the methods."
 - "Find 'Does Transparency in Moderation Really Matter' by Jhaver et al. and pull the full text."
 
-PDFs save to `~/Downloads`. If the session expires you'll be asked to sign in again. If a publisher blocks the automated fetch, Claude hands you a link to open yourself.
+PDFs save to `~/Downloads`. When a session expires you'll be asked to sign in again. When a publisher blocks the automated fetch, you get a link to open yourself.
 
-## Making the agent reach for it on its own
+## Making it reach for the tools on its own
 
-Claude Code and Codex load the bundled skill automatically, so they already
-know to try umlib when a paper looks inaccessible. For other agents, paste this
-into your project instructions (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`, …):
+Claude Code and Codex load the bundled skill, so they already try umlib when a paper looks out of reach. For other agents, paste this into your project instructions (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`):
 
-> When searching for or downloading scholarly articles, papers, books or other publications, use the umlib tools. If content looks inaccessible — paywalled, login-walled, 403, or abstract-only — try umlib's `fetch_pdf` before concluding it is unavailable, since it may be accessible through the authenticated library session. Fetch one paper at a time.
+> When searching for or downloading scholarly articles, papers, books or other publications, use the umlib tools. If content looks inaccessible (paywalled, login-walled, 403, or abstract-only) try umlib's `fetch_pdf` before concluding it is unavailable, since it may be accessible through the authenticated library session. Fetch one paper at a time.
 
 ## One rule
 
-Fetch papers one at a time, as you need them (it limits itself to 8 an hour). Don't bulk-download reading lists: the library's [appropriate-use policy](https://lib.umich.edu/about-us/policies/statement-appropriate-use-electronic-resources) forbids systematic downloading, and publishers respond by cutting off the whole campus. For text or data mining at scale, contact library-ds@umich.edu.
+Fetch papers one at a time, as you need them. It limits itself to 8 an hour. Please don't bulk-download reading lists: the library's [appropriate-use policy](https://lib.umich.edu/about-us/policies/statement-appropriate-use-electronic-resources) forbids systematic downloading, and publishers respond by cutting off the whole campus rather than one account. For text or data mining at scale, talk to library-ds@umich.edu.
 
 ## Configuration
 
@@ -92,6 +67,8 @@ Fetch papers one at a time, as you need them (it limits itself to 8 an hour). Do
 | `UMLIB_PROXY_BASE` | `https://proxy.lib.umich.edu/login?url=` | EZproxy prefix (change for other schools) |
 | `UMLIB_MAX_FETCHES_PER_HOUR` | `8` | Fetch cap |
 
+Set `UMLIB_PROXY_BASE` and it works at any other EZproxy school.
+
 ## Develop
 
 ```sh
@@ -100,7 +77,7 @@ uv run pytest
 uv run python scripts/smoke.py   # runs the server over stdio and exercises it
 ```
 
-The plugin tracks `@main`, so lab members pick up fixes whenever their server next starts. If you edit the source while a server is running, restart it (`/mcp` in Claude Code) — a stdio server doesn't reload on its own.
+The plugin tracks `@main`, so everyone picks up changes the next time their server starts. A stdio server doesn't reload while it's running, so restart it (`/mcp` in Claude Code) after editing the source.
 
 ## License
 
