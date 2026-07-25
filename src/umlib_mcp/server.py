@@ -3,7 +3,7 @@ import re
 import threading
 from importlib.metadata import version
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from . import auth, browser, config, fetch, oa, ratelimit
 
@@ -205,7 +205,9 @@ async def resolve(query: str) -> dict:
 
 
 @mcp.tool()
-async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
+async def fetch_pdf(
+    doi_or_url: str, filename: str | None = None, ctx: Context | None = None
+) -> dict:
     """Fetch ONE article PDF and save it to the download directory.
 
     Use this whenever scholarly full text is out of reach: a paywall, a login
@@ -226,7 +228,16 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
     the user to report back. On `no_pdf_found` or `host_not_proxied`, give the
     user the returned URL to open themselves rather than retrying.
     """
+
+    async def progress(done: float, note: str) -> None:
+        # a fetch can run for minutes; without this the client sees silence
+        # and may time the call out
+        if ctx is not None:
+            with contextlib.suppress(Exception):
+                await ctx.report_progress(done, 1.0, note)
+
     if auth.login_active():
+        await progress(0.05, "waiting for you to finish signing in")
         # wait for the user to finish signing in rather than making them
         # come back and ask again
         await auth.await_login()
@@ -262,8 +273,10 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
     name = filename or fetch.slugify_filename(meta.get("title"), meta.get("year"), doi)
 
     if doi:
+        await progress(0.2, "looking for a free copy")
         oa_info = await oa.open_access(doi)
         if oa_info and oa_info.get("pdf_url"):
+            await progress(0.4, "downloading the free copy")
             data = await fetch.download_open_access(oa_info["pdf_url"])
             if data:
                 try:
@@ -301,6 +314,7 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
             "message": "no direct publisher link for this DOI; open mgetit_url to see how U-M provides access",
         }
 
+    await progress(0.6, "fetching through the library proxy")
     try:
         data, used = await fetch.fetch_licensed(publisher_url)
     except auth.NeedsLogin as e:
@@ -353,6 +367,7 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
             "detail": _safe(e),
             "manual_url": config.proxied(publisher_url),
         }
+    await progress(0.95, "saving")
     try:
         path = fetch.save_pdf(data, name)
     except OSError as e:  # disk full, unwritable dir: don't lose the fetch silently
