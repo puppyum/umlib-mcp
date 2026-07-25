@@ -15,9 +15,17 @@ Let Claude read papers using your own University of Michigan library access. Whe
 
 ## Install
 
-Install [uv](https://docs.astral.sh/uv/) first (`curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`). Everything else is automatic: dependencies install on first launch, and the server fetches its browser (~150 MB, once per machine) in the background as soon as it starts.
+### Easiest: ask Claude to do it
 
-**Claude Code** (recommended):
+Paste this into Claude Code:
+
+> Set me up with umlib-mcp. Install uv if I don't have it, then run `claude plugin marketplace add puppyum/umlib-mcp` and `claude plugin install umlib@umlib-lab`. My email for the open-access check is you@umich.edu. Then log me into the library proxy.
+
+It installs the prerequisite, adds the plugin, and opens the sign-in window for you. If the tools don't show up afterwards, run `/reload-plugins` or restart Claude Code.
+
+### Or do it yourself
+
+Install [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`), then in Claude Code:
 
 ```
 /plugin marketplace add puppyum/umlib-mcp
@@ -25,6 +33,8 @@ Install [uv](https://docs.astral.sh/uv/) first (`curl -LsSf https://astral.sh/uv
 ```
 
 To turn on the free-copy check, export your email in the shell that starts Claude Code: `export UMLIB_EMAIL=you@umich.edu`.
+
+Everything else is automatic: dependencies install on first launch, and the server downloads its browser (~150 MB, once per machine) in the background as soon as it starts.
 
 **Claude Desktop:** Settings → Developer → Edit Config. Use an absolute path to `uvx` (find it with `which uvx`):
 
