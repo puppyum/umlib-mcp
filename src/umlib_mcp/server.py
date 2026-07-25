@@ -76,6 +76,9 @@ async def auth_status(live_check: bool = True, wait_for_login: bool = True) -> d
         "settings_file": f"{config.CONFIG_FILE}"
         + ("" if config.CONFIG_FILE.exists() else " (not created yet)"),
     }
+    if config.CONFIG_ERROR:
+        info["config_error"] = config.CONFIG_ERROR
+        return info
     if auth.login_active():
         if wait_for_login:
             await auth.await_login()

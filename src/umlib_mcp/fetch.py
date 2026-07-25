@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
+import ipaddress
 import re
+import socket
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -49,31 +51,50 @@ def _unproxy_host(proxied_page_url: str) -> str:
     suffix = "." + config.REWRITE_HOST
     if not host.endswith(suffix):
         return ""
-    return host[: -len(suffix)].replace("-", ".")
+    # EZproxy encodes a dot as "-" and a literal hyphen as "--", so
+    # link-springer.com arrives as link--springer-com. Decode in that order.
+    label = host[: -len(suffix)]
+    return label.replace("--", "\x00").replace("-", ".").replace("\x00", "-")
 
 
-def prepare_candidates(
-    urls: list[str | None], page_url: str, publisher_host: str
-) -> list[str]:
+MAX_CANDIDATES = 8
+
+
+def prepare_candidates(urls, page_url: str, publisher_host: str) -> list[str]:
     """Turn raw PDF hrefs harvested from an untrusted publisher DOM into a
     safe fetch list. Relative links resolve against the proxied page; links
     already on the proxy pass through; links on the bare publisher host are
     re-proxied so the session cookie applies; anything else (an arbitrary
     attacker host) is dropped so we never send credentialed requests off-proxy.
     """
+    # The JS runs in the publisher's own page, where Set and Array.slice are
+    # page-owned, so its slice(0, 8) is not a cap we control: a hostile page
+    # can return a list of any length or any type. Everything below is
+    # enforced here, in Python, where the page cannot reach it.
+    if not isinstance(urls, list):
+        return []
     out: list[str] = []
     for u in urls:
-        if not u or u.startswith(("javascript:", "mailto:", "#")):
+        if len(out) >= MAX_CANDIDATES:
+            break
+        if (
+            not isinstance(u, str)
+            or not u
+            or u.startswith(("javascript:", "mailto:", "#"))
+        ):
             continue
         u = urljoin(page_url, u).replace("/doi/epdf/", "/doi/pdf/")
         if not config.is_web_url(u):
             continue
-        if browser.is_proxied_url(u):
+        # only this article's own host: a link to a *different* licensed
+        # publisher would still be "proxied", and following it would let one
+        # publisher's page pull content from another under the user's licence
+        if browser.host_of(u) == browser.host_of(page_url):
             candidate = u
         elif browser.host_of(u) == publisher_host:
             candidate = config.proxied(u)  # raw publisher host -> back through proxy
         else:
-            continue  # off-proxy third-party host: don't fetch with our cookies
+            continue  # anywhere else: don't fetch it with our session cookies
         if candidate not in out:
             out.append(candidate)
     return out
@@ -118,8 +139,38 @@ def _oversized(content_length: str | None) -> bool:
     )
 
 
+def _is_public_host(url: str) -> bool:
+    """A metadata service is a third party; never let a URL it hands back
+    point the fetcher at localhost, the link-local metadata service, or
+    anything else on the private network."""
+    host = browser.host_of(url)
+    if not host or host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
 async def download_open_access(url: str) -> bytes | None:
     if not config.is_web_url(url):
+        return None
+    if not await asyncio.to_thread(_is_public_host, url):
         return None
     try:
         async with (
@@ -133,15 +184,23 @@ async def download_open_access(url: str) -> bytes | None:
         ):
             if r.status_code != 200 or _oversized(r.headers.get("content-length")):
                 return None
+            declared = r.headers.get("content-length")
             chunks, total = [], 0
             async for chunk in r.aiter_bytes():
                 total += len(chunk)
                 if total > config.MAX_PDF_BYTES:
                     return None
                 chunks.append(chunk)
+        # a connection cut mid-download would otherwise be saved as a
+        # complete, silently corrupt PDF
+        if declared and declared.isdigit() and total != int(declared):
+            return None
         body = b"".join(chunks)
         return body if body.startswith(b"%PDF") else None
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError, UnicodeError, OSError):
+        # httpx raises non-HTTPError types for malformed URLs and bad hosts
+        return None
+    except TimeoutError:
         return None
 
 
@@ -174,6 +233,10 @@ async def fetch_licensed(publisher_url: str) -> tuple[bytes, str]:
         return await _fetch_via_proxy(proxied_url, publisher_host)
     except (NeedsLogin, HostNotProxied):
         raise  # already refunded at the point of detection
+    except NoPdfFound:
+        # the proxy authenticated us and the publisher page was fetched, so
+        # this consumed a licensed fetch whether or not a PDF came back
+        raise
     except BaseException:
         ratelimit.refund()  # browser never got us to licensed content
         raise

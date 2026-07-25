@@ -47,18 +47,35 @@ def _path(key: str, default: str) -> Path:
 # interface ("Create Links that Work"). Override for other institutions.
 PROXY_BASE = setting("proxy_base", "https://proxy.lib.umich.edu/login?url=")
 PROXY_HOST = urlparse(PROXY_BASE).hostname or ""
-if not PROXY_HOST:  # a malformed proxy_base must not silently fall back to U-M
-    raise ValueError(
-        f"proxy_base has no hostname: {PROXY_BASE!r}. "
-        "It should look like https://proxy.your-school.edu/login?url="
-    )
+# A bad proxy_base must not silently fall back to U-M, but raising here would
+# stop the server from starting at all and the user would only see their agent
+# fail to connect. Record it instead and let the tools report it.
+CONFIG_ERROR = (
+    ""
+    if PROXY_HOST
+    else f"proxy_base has no hostname: {PROXY_BASE!r} "
+    "(it should look like https://proxy.your-school.edu/login?url=)"
+)
+
 
 # EZproxy rewrites a licensed site onto a subdomain of the proxy host
-# (www-jstor-org.proxy.lib.umich.edu). Some institutions serve the login page
-# and the rewritten hosts from different domains, so allow the rewrite domain
-# to be set independently; it defaults to the proxy host, which is the common
-# single-domain case.
-REWRITE_HOST = setting("rewrite_host", PROXY_HOST)
+# (www-jstor-org.proxy.lib.umich.edu). OCLC-hosted schools are the common
+# exception: they sign in at login.<school>.idm.oclc.org but rewrite onto
+# <host>.<school>.idm.oclc.org, so the login label has to be dropped.
+def _default_rewrite_host(proxy_host: str) -> str:
+    if proxy_host.startswith("login.") and proxy_host.endswith(".idm.oclc.org"):
+        return proxy_host[len("login.") :]
+    return proxy_host
+
+
+REWRITE_HOST = setting("rewrite_host", _default_rewrite_host(PROXY_HOST)).lower()
+PROXY_HOST = PROXY_HOST.lower()
+
+# U-M's link resolver. Schools using another resolver can point this elsewhere;
+# an empty value simply omits the fulfillment link from results.
+RESOLVER_BASE = setting(
+    "resolver_base", "https://mgetit.lib.umich.edu/resolve?rft_id=info:doi/"
+)
 
 PROFILE_DIR = _path("profile_dir", "~/.umlib/profile")
 DOWNLOAD_DIR = _path("download_dir", "~/Downloads")
@@ -97,8 +114,6 @@ LOCK_TIMEOUT_S = setting("lock_timeout_s", LOGIN_TIMEOUT_S + 60, float)
 LOGIN_WAIT_S = setting("login_wait_s", 150.0, float)
 CANARY_URL = setting("canary_url", "https://www.jstor.org/")
 
-MGETIT_BASE = "https://mgetit.lib.umich.edu/resolve?rft_id=info:doi/"
-
 USER_AGENT = f"umlib-mcp/0.1 (mailto:{EMAIL})" if EMAIL else "umlib-mcp/0.1"
 
 
@@ -130,4 +145,7 @@ def proxied(url: str) -> str:
 
 
 def mgetit_url(doi: str) -> str:
-    return MGETIT_BASE + doi
+    """Link to the library's fulfillment page. Empty when no resolver is set."""
+    from urllib.parse import quote
+
+    return RESOLVER_BASE + quote(doi, safe="/.") if RESOLVER_BASE else ""

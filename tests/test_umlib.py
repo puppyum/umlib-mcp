@@ -205,6 +205,57 @@ def test_malformed_config_file_does_not_crash(tmp_path, monkeypatch):
     assert config._load_file() == {}
 
 
+def test_hostile_page_cannot_amplify_candidate_requests():
+    """The JS cap runs in the publisher's page, where Set and Array.slice are
+    page-owned, so a hostile page can return a list of any length or type.
+    The real limit has to be enforced here, in Python."""
+    page = "https://dl-acm-org.proxy.lib.umich.edu/doi/10.1/a"
+    flood = [f"/doi/pdf/10.1/{i}" for i in range(5000)]
+    assert (
+        len(fetch.prepare_candidates(flood, page, "dl.acm.org")) == fetch.MAX_CANDIDATES
+    )
+
+    # a page can also return something that is not a list of strings at all
+    assert fetch.prepare_candidates(12345, page, "dl.acm.org") == []
+    assert fetch.prepare_candidates("not-a-list", page, "dl.acm.org") == []
+    assert fetch.prepare_candidates([{"href": "x"}, None, 7], page, "dl.acm.org") == []
+
+
+def test_candidates_stay_on_this_articles_host():
+    """A link to a different licensed publisher is still 'proxied', but
+    following it would pull another publisher's content under the licence."""
+    page = "https://dl-acm-org.proxy.lib.umich.edu/doi/10.1/a"
+    out = fetch.prepare_candidates(
+        ["https://www-sciencedirect-com.proxy.lib.umich.edu/x.pdf"], page, "dl.acm.org"
+    )
+    assert out == []
+
+
+def test_unproxy_host_decodes_hyphenated_publishers(monkeypatch):
+    monkeypatch.setattr(config, "REWRITE_HOST", "proxy.lib.umich.edu")
+    # EZproxy encodes a literal hyphen as "--"
+    assert (
+        fetch._unproxy_host("https://link--springer-com.proxy.lib.umich.edu/a")
+        == "link-springer.com"
+    )
+
+
+def test_private_hosts_are_refused_for_open_access_downloads():
+    assert not fetch._is_public_host("http://localhost:8080/x.pdf")
+    assert not fetch._is_public_host("http://127.0.0.1/x.pdf")
+    assert not fetch._is_public_host("http://169.254.169.254/latest/meta-data/")
+    assert not fetch._is_public_host("http://[::1]/x.pdf")
+    assert not fetch._is_public_host("http://nonexistent.invalid/x.pdf")
+
+
+def test_oclc_hosted_schools_get_the_right_rewrite_host():
+    assert (
+        config._default_rewrite_host("login.proxy.lib.example.idm.oclc.org")
+        == "proxy.lib.example.idm.oclc.org"
+    )
+    assert config._default_rewrite_host("proxy.lib.umich.edu") == "proxy.lib.umich.edu"
+
+
 def test_plausible_match_rejects_unrelated_titles():
     from umlib_mcp.server import _plausible_match as ok
 

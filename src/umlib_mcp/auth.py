@@ -152,12 +152,9 @@ def clear_session() -> dict:
     # the marker alone is not enough: ensure_profile_dir() drops it wherever
     # UMLIB_PROFILE_DIR points, so a profile dir set to $HOME would otherwise
     # make this an rm -rf of the user's home
-    unsafe = (
-        p == home
-        or home.is_relative_to(p)
-        or p == p.parent  # filesystem root
-        or len(p.relative_to(home).parts) < 1
-    )
+    # note: no p.relative_to(home) here - it raises ValueError for a profile
+    # dir outside home, and the is_relative_to check below already covers that
+    unsafe = p == home or home.is_relative_to(p) or p == p.parent
     if unsafe or not (config.PROFILE_MARKER.exists() and p.is_relative_to(home)):
         return {
             "cleared": False,
