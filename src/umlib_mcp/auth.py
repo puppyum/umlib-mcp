@@ -99,6 +99,16 @@ async def _login_flow() -> dict:
             await asyncio.sleep(2)
     # returned only after the context is closed, so a close error on the way
     # out can't overwrite a successful result
+    if result["authenticated"] and not browser.last_save_ok():
+        # the cookies live in memory until teardown writes them; if that failed
+        # the next fetch would ask for a sign-in the user just completed
+        return {
+            "authenticated": False,
+            "message": (
+                f"signed in, but the session could not be written to "
+                f"{config.STATE_FILE}; check the permissions there and run login again"
+            ),
+        }
     return result
 
 
@@ -137,6 +147,10 @@ def start_login() -> dict:
             "started": False,
             "message": f"a login window is already open; complete {SIGN_IN} there",
         }
+    if msg := _no_display():
+        # the background task would find this out and fail; saying so here
+        # avoids promising a window that cannot open
+        return {"started": False, "message": msg}
     _login_task = asyncio.get_running_loop().create_task(_run_login())
     return {
         "started": True,

@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from umlib_mcp import browser, config, fetch, oa
 
@@ -459,3 +460,239 @@ def test_message_guards_non_json_and_missing_key():
     assert oa._message(httpx.Response(200, json={"message": {"DOI": "10.1/x"}})) == {
         "DOI": "10.1/x"
     }
+
+
+# --- regressions found by the post-fix audit ---------------------------------
+
+
+def test_oclc_sign_in_page_is_not_licensed_content(monkeypatch):
+    """At an OCLC school the sign-in host is itself a subdomain of the rewrite
+    host, so testing the subdomain branch first made the proxy's own login page
+    look like licensed content: auth_status reported a session nobody had."""
+    monkeypatch.setattr(config, "PROXY_HOST", "login.example.idm.oclc.org")
+    monkeypatch.setattr(config, "REWRITE_HOST", "example.idm.oclc.org")
+    assert not browser.is_proxied_url(
+        "https://login.example.idm.oclc.org/login?url=https://www.jstor.org/"
+    )
+    assert not browser.is_proxied_url("https://login.example.idm.oclc.org/logout")
+    # a genuinely rewritten article on the same proxy still counts
+    assert browser.is_proxied_url("https://www-jstor-org.example.idm.oclc.org/stable/1")
+
+
+def test_profile_lock_lives_outside_the_deletable_profile_dir(tmp_path, monkeypatch):
+    """logout rmtrees PROFILE_DIR. flock binds to the inode, so a lock inside
+    that tree let a waiter keep the deleted inode while the next process
+    acquired the recreated file - two browsers on one profile."""
+    monkeypatch.setattr(config, "PROFILE_DIR", tmp_path / "profile")
+    monkeypatch.setattr(config, "LOCK_DIR", tmp_path / "locks")
+    assert not browser._lock_path().is_relative_to(config.PROFILE_DIR)
+
+    fd = browser._acquire_file_lock(1.0)
+    try:
+        # taking the lock must not conjure up a profile directory: logout would
+        # then leave one behind, and auth_status would probe instead of saying
+        # "no session yet"
+        assert not config.PROFILE_DIR.exists()
+    finally:
+        browser._release_file_lock(fd)
+
+
+def test_cancelled_pre_yield_teardown_releases_the_profile_lock(tmp_path, monkeypatch):
+    """A CancelledError is a BaseException, so suppress(Exception) around the
+    shielded close let it skip the release and strand the flock for the life of
+    the process - wedging every later fetch, login and logout on the machine."""
+    import asyncio
+    import contextlib
+
+    monkeypatch.setattr(config, "PROFILE_DIR", tmp_path / "profile")
+    monkeypatch.setattr(config, "LOCK_DIR", tmp_path / "locks")
+
+    class SlowCtx:
+        async def close(self):
+            await asyncio.sleep(5)  # so the cancellation lands inside the close
+
+    async def fake_launch(headless):
+        return SlowCtx()
+
+    async def failing_restore(ctx):
+        raise RuntimeError("pre-yield failure")
+
+    monkeypatch.setattr(browser, "_launch", fake_launch)
+    monkeypatch.setattr(browser, "_restore_state", failing_restore)
+
+    async def scenario():
+        async def use():
+            async with browser.session(headless=True):
+                pass
+
+        task = asyncio.create_task(use())
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with contextlib.suppress(BaseException):
+            await task
+        assert not browser._held_locks
+        # the real proof is that the profile can be locked again
+        fd = await asyncio.to_thread(browser._acquire_file_lock, 2.0)
+        browser._release_file_lock(fd)
+
+    asyncio.run(scenario())
+
+
+def test_targeted_pdf_selectors_run_before_the_catch_all():
+    """The candidate list is capped, so a page carrying a pile of ordinary .pdf
+    links (author guides, supplements) starved out the one publisher-specific
+    link that was actually the full text."""
+    js = fetch.PDF_CANDIDATE_JS
+    catch_all = js.index('a[href*=".pdf"]')
+    for specific in ("/stamp/stamp.jsp", "/pdfdirect", "downloadpdf", "/pdfft"):
+        assert js.index(specific) < catch_all, specific
+
+
+def test_open_access_download_accepts_a_gzipped_pdf():
+    """aiter_bytes yields decompressed bytes while Content-Length describes the
+    compressed transfer, so comparing the two rejected every gzipped PDF and
+    fell through to the licensed path for a paper that was free."""
+    import asyncio
+    import gzip
+    import http.server
+    import socketserver
+    import threading
+
+    body = b"%PDF-1.4\n" + b"x" * 20000 + b"\n%%EOF\n"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path == "/gzip.pdf":
+                payload = gzip.compress(body)
+                self.send_response(200)
+                self.send_header("Content-Encoding", "gzip")
+            elif self.path == "/truncated.pdf":
+                payload = body[:5000]
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))  # a lie
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            else:
+                payload = body
+                self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        # the SSRF guard rejects loopback by design; this test is about the
+        # content-length logic that runs after it
+        original = fetch._is_public_host
+        fetch._is_public_host = lambda url: True
+        try:
+            get = fetch.download_open_access
+            assert asyncio.run(get(f"http://127.0.0.1:{port}/plain.pdf")) == body
+            assert asyncio.run(get(f"http://127.0.0.1:{port}/gzip.pdf")) == body
+            # a genuinely short read must still be caught
+            assert asyncio.run(get(f"http://127.0.0.1:{port}/truncated.pdf")) is None
+        finally:
+            fetch._is_public_host = original
+    finally:
+        srv.shutdown()
+
+
+def test_zero_fetches_per_hour_switches_licensed_fetching_off(monkeypatch):
+    """It used to report zero remaining and then let the fetch through."""
+    import asyncio
+
+    from umlib_mcp import ratelimit
+
+    monkeypatch.setattr(config, "MAX_FETCHES_PER_HOUR", 0)
+    monkeypatch.setattr(ratelimit, "_slots", {})
+    assert ratelimit.remaining_this_hour() == 0
+    with pytest.raises(ratelimit.RateLimited):
+        asyncio.run(ratelimit.acquire())
+
+
+def test_bad_settings_are_reported_instead_of_killing_the_server(monkeypatch):
+    """Every one of these used to raise at import, so the server never started
+    and the user saw nothing but their agent failing to connect."""
+    import importlib
+
+    for var, value, check in [
+        # urlparse raises "Invalid IPv6 URL" on an unbalanced bracket
+        ("UMLIB_PROXY_BASE", "https://[::1/login?url=", lambda m: not m.PROXY_HOST),
+        # expanduser raises RuntimeError on an unknown ~user
+        ("UMLIB_DOWNLOAD_DIR", "~nosuchuser12345/Papers", lambda m: m.DOWNLOAD_DIR),
+        # the session cookie must never travel in the clear
+        (
+            "UMLIB_PROXY_BASE",
+            "http://proxy.example.edu/login?url=",
+            lambda m: not m.PROXY_HOST,
+        ),
+    ]:
+        monkeypatch.setenv(var, value)
+        reloaded = importlib.reload(config)
+        assert reloaded.CONFIG_ERROR, f"{var}={value} should be reported"
+        assert check(reloaded), f"{var}={value}"
+        monkeypatch.delenv(var, raising=False)
+    importlib.reload(config)
+
+
+def test_resolver_base_can_actually_be_switched_off(monkeypatch):
+    """setting() skips empty values as "unset", so an empty resolver_base fell
+    back to U-M's resolver and non-U-M users got U-M links in every result."""
+    import importlib
+
+    monkeypatch.setenv("UMLIB_RESOLVER_BASE", "")
+    reloaded = importlib.reload(config)
+    assert reloaded.RESOLVER_BASE == ""
+    assert reloaded.mgetit_url("10.1/x") == ""
+    monkeypatch.delenv("UMLIB_RESOLVER_BASE", raising=False)
+    importlib.reload(config)
+
+
+def test_a_toml_bool_does_not_become_a_number(monkeypatch):
+    """int(True) is 1, so `max_fetches_per_hour = true` silently became a cap
+    of one fetch an hour."""
+    monkeypatch.setattr(config, "_FILE", {"max_fetches_per_hour": True})
+    monkeypatch.delenv("UMLIB_MAX_FETCHES_PER_HOUR", raising=False)
+    assert config.setting("max_fetches_per_hour", 60, int) == 60
+
+
+def test_settings_under_a_section_header_are_reported(tmp_path, monkeypatch):
+    """A [umlib] table is the common TOML mistake, and every setting in it was
+    silently ignored."""
+    import importlib
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[umlib]\nmax_fetches_per_hour = 5\n")
+    monkeypatch.setenv("UMLIB_CONFIG", str(cfg))
+    reloaded = importlib.reload(config)
+    assert reloaded.MAX_FETCHES_PER_HOUR == 60
+    assert "section" in reloaded.CONFIG_ERROR
+    monkeypatch.delenv("UMLIB_CONFIG", raising=False)
+    importlib.reload(config)
+
+
+def test_a_missing_doi_is_not_reported_as_a_network_problem():
+    """crossref_work returned None for both a 404 and an unreachable service,
+    so a typo'd DOI told the user to check their connection."""
+    import asyncio
+
+    async def fake_get_404(self, url, **kw):
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    async def fake_get_boom(self, url, **kw):
+        raise httpx.ConnectError("down")
+
+    original = httpx.AsyncClient.get
+    try:
+        httpx.AsyncClient.get = fake_get_404
+        assert asyncio.run(oa.crossref_work("10.1/nope")) == {}  # answered: no such DOI
+        httpx.AsyncClient.get = fake_get_boom
+        assert asyncio.run(oa.crossref_work("10.1/nope")) is None  # unreachable
+    finally:
+        httpx.AsyncClient.get = original

@@ -86,15 +86,23 @@ email = "you@umich.edu"     # adds Unpaywall alongside OpenAlex
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `max_fetches_per_hour` | `60` | Courtesy cap on licensed fetches |
+| `max_fetches_per_hour` | `60` | Courtesy cap on licensed fetches. `0` switches licensed fetching off entirely |
 | `min_fetch_interval_s` | `5` | Seconds between licensed fetches |
 | `email` | unset | Optional. Free-copy checks use OpenAlex and need no email; setting one adds Unpaywall as a second source |
 | `download_dir` | `~/Downloads` | Where PDFs save |
 | `profile_dir` | `~/.umlib/profile` | Where the session is stored |
-| `proxy_base` | `https://proxy.lib.umich.edu/login?url=` | EZproxy prefix |
+| `proxy_base` | `https://proxy.lib.umich.edu/login?url=` | EZproxy prefix. Must be `https`: the session cookie would otherwise travel in the clear |
 | `canary_url` | `https://www.jstor.org/` | The site used to tell "signed in" from "signed out". Point it at something your library definitely licenses |
-| `resolver_base` | U-M's MGet It | Link resolver for the "how do I get this" link; leave empty to omit it |
+| `resolver_base` | U-M's MGet It | Link resolver for the "how do I get this" link; set it to `""` to omit it |
 | `rewrite_host` | derived from `proxy_base` | Only needed if your proxy signs in on one domain and rewrites onto another |
+| `max_pdf_bytes` | `104857600` | Refuse anything larger before saving |
+| `login_timeout_s` | `300` | How long the sign-in window waits for you |
+| `login_wait_s` | `150` | How long a fetch waits for a sign-in already in progress |
+| `lock_timeout_s` | `login_timeout_s + 60` | How long to wait for another agent's browser to finish |
+
+Two more inputs come from the environment only: `UMLIB_CONFIG` moves the config file itself, and `XDG_DOWNLOAD_DIR` supplies the default download directory on Linux desktops that set it.
+
+Anything umlib could not use, it says so in `auth_status` under `config_error` rather than falling back silently. Relative paths resolve against your home directory, not whatever directory your agent happened to start in.
 
 It works at other EZproxy schools, but check three settings before trusting it: `proxy_base`, `canary_url` (the default is JSTOR, and a school that does not license JSTOR can never look signed in), and `resolver_base` (the default points at U-M's resolver). OCLC-hosted proxies are detected automatically. Every setting also reads from an environment variable (`UMLIB_MAX_FETCHES_PER_HOUR` and so on), which wins over the file; the file exists because environment variables are awkward to apply across agents. `auth_status` reports the limit in force and which file it read.
 

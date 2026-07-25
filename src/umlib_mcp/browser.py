@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import subprocess
@@ -131,9 +132,15 @@ _held_locks: set[int] = set()
 
 
 def _lock_path():
-    # inside the profile dir (mode 700, ours) rather than its parent, which
-    # for a custom profile_dir could be shared or world-writable
-    return config.PROFILE_DIR / ".umlib.lock"
+    # Not inside PROFILE_DIR: logout deletes that whole tree, and flock binds
+    # to the inode, so a lock removed while held lets a waiter keep the deleted
+    # inode while the next process acquires the recreated file - two Chromiums
+    # on one profile, which is the exact corruption this lock exists to stop.
+    # Not in the profile's parent either, which for a custom profile_dir may be
+    # shared. A private directory of ours, keyed by profile path so two
+    # different profiles do not queue behind each other.
+    digest = hashlib.sha256(str(config.PROFILE_DIR).encode()).hexdigest()[:16]
+    return config.LOCK_DIR / f"{digest}.lock"
 
 
 def _acquire_file_lock(timeout: float | None = None):
@@ -141,7 +148,10 @@ def _acquire_file_lock(timeout: float | None = None):
     may each be running their own copy of this server. A lock file makes them
     take turns instead of corrupting the profile."""
     timeout = config.LOCK_TIMEOUT_S if timeout is None else timeout
-    _lock_path().parent.mkdir(parents=True, exist_ok=True)
+    # only the lock directory: creating PROFILE_DIR here would leave a stray
+    # profile behind after logout and defeat the "no session yet" fast path
+    config.LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    os.chmod(config.LOCK_DIR, 0o700)
     fd = os.open(_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
     deadline = time.monotonic() + timeout
     while True:
@@ -170,12 +180,23 @@ def _release_file_lock(fd) -> None:
         os.close(fd)
 
 
+_last_save_ok = False
+
+
+def last_save_ok() -> bool:
+    """Whether the most recent teardown actually wrote cookies to disk, so
+    login can avoid reporting a saved session that was not saved."""
+    return _last_save_ok
+
+
 async def _teardown(ctx, fd) -> None:
     """Save cookies, close the browser, then release the lock - in that order,
     and always all three, so the profile is never handed on while in use."""
+    global _last_save_ok
+    _last_save_ok = False
     try:
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(_save_state(ctx), timeout=30)
+            _last_save_ok = await asyncio.wait_for(_save_state(ctx), timeout=30)
         with contextlib.suppress(Exception):
             await asyncio.wait_for(ctx.close(), timeout=30)
     finally:
@@ -209,11 +230,17 @@ async def session(headless: bool = True):
             await _restore_state(ctx)
         except BaseException:
             # _restore_state can fail or be cancelled after the launch, which
-            # would otherwise leave a live browser on the profile we unlock
-            if ctx is not None:
-                with contextlib.suppress(Exception):
-                    await asyncio.shield(asyncio.wait_for(ctx.close(), timeout=30))
-            _release_file_lock(fd)
+            # would otherwise leave a live browser on the profile we unlock.
+            # The release goes in a finally and the close suppresses
+            # BaseException: a CancelledError raised by that await is not an
+            # Exception, so suppressing only Exception let it skip the release
+            # and strand the flock for the life of the process.
+            try:
+                if ctx is not None:
+                    with contextlib.suppress(BaseException):
+                        await asyncio.shield(asyncio.wait_for(ctx.close(), timeout=30))
+            finally:
+                _release_file_lock(fd)
             raise
         global _live_contexts
         _live_contexts += 1
@@ -243,9 +270,12 @@ def host_of(url: str) -> str:
 def is_proxied_url(url: str) -> bool:
     """True once EZproxy has rewritten us onto a licensed host."""
     host = host_of(url)
-    if host.endswith("." + config.REWRITE_HOST):
-        return True
-    # the proxy's own domain counts too, except for its login/auth pages
-    return host == config.PROXY_HOST and not urlparse(url).path.startswith(
-        ("/login", "/menu/login", "/logout")
-    )
+    # The sign-in host is checked first, and never counts as licensed content.
+    # At an OCLC school it is itself a subdomain of the rewrite host
+    # (login.school.idm.oclc.org under school.idm.oclc.org), so testing the
+    # subdomain branch first made the proxy's own login page look licensed:
+    # auth_status reported a session nobody had, and the login window closed
+    # itself before the user had signed in.
+    if host == config.PROXY_HOST:
+        return not urlparse(url).path.startswith(("/login", "/menu/login", "/logout"))
+    return host.endswith("." + config.REWRITE_HOST)

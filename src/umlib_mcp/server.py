@@ -49,6 +49,19 @@ _STOPWORDS = frozenset(
 )
 
 
+def _misconfigured() -> dict | None:
+    """Every tool that touches the proxy checks this. Only auth_status used to,
+    so a broken proxy_base left the others handing back URLs that cannot open."""
+    problem = config.unusable()
+    if not problem:
+        return None
+    return {
+        "status": "error",
+        "code": "config_error",
+        "message": f"{problem}. Fix it in {config.CONFIG_FILE} and restart the server",
+    }
+
+
 def _words(text: str) -> set[str]:
     # keep two-letter tokens: "AI", "ML" and "UX" are real search terms
     return {
@@ -92,7 +105,8 @@ async def auth_status(live_check: bool = True, wait_for_login: bool = True) -> d
     }
     if config.CONFIG_ERROR:
         info["config_error"] = config.CONFIG_ERROR
-        return info
+        if config.unusable():
+            return info  # nothing below can work without a usable proxy_base
     if auth.login_active():
         if wait_for_login:
             await auth.await_login()
@@ -155,6 +169,8 @@ async def resolve(query: str) -> dict:
     title and the match is uncertain, returns candidates for the user to
     choose from instead of guessing.
     """
+    if bad := _misconfigured():
+        return bad
     doi = oa.extract_doi(query)
     candidates = []
     if doi:
@@ -241,6 +257,8 @@ async def fetch_pdf(
             with contextlib.suppress(Exception):
                 await ctx.report_progress(done, 1.0, note)
 
+    if bad := _misconfigured():
+        return bad
     if auth.login_active():
         await progress(0.05, "waiting for you to finish signing in")
         # wait for the user to finish signing in rather than making them
@@ -254,25 +272,20 @@ async def fetch_pdf(
             }
 
     meta = {}
-    looks_like_url = config.is_web_url(doi_or_url)
-    if looks_like_url and not config.is_web_url(doi_or_url):
-        return {
-            "status": "error",
-            "code": "bad_input",
-            "message": "only http(s) URLs are supported",
-        }
-    if looks_like_url:  # is_web_url is case-insensitive, so HTTPS:// works too
-        doi = oa.extract_doi(doi_or_url)
+    lookup_reachable = True
+    doi = oa.extract_doi(doi_or_url)
+    if config.is_web_url(doi_or_url):  # is_web_url is case-insensitive
         publisher_url = doi_or_url
     else:
-        doi = oa.extract_doi(doi_or_url)
         if not doi:
             return {
                 "status": "error",
                 "code": "bad_input",
                 "message": "pass a DOI or a publisher URL; use resolve for title searches",
             }
-        meta = await oa.crossref_work(doi) or {}
+        found = await oa.crossref_work(doi)
+        lookup_reachable = found is not None
+        meta = found or {}
         publisher_url = meta.get("publisher_url")
 
     name = filename or fetch.slugify_filename(meta.get("title"), meta.get("year"), doi)
@@ -301,14 +314,22 @@ async def fetch_pdf(
                 }
 
     if not publisher_url and not meta:
-        # crossref gave us nothing at all: an unreachable service, not a DOI
-        # that genuinely lacks a publisher link
+        if not lookup_reachable:
+            return {
+                "status": "error",
+                "code": "lookup_unavailable",
+                "doi": doi,
+                "message": "could not reach the metadata service, so there is no "
+                "publisher link to try; check your connection and retry",
+            }
+        # the service answered and has no such record, which is a typo in the
+        # DOI far more often than it is a gap in Crossref
         return {
             "status": "error",
-            "code": "lookup_unavailable",
+            "code": "doi_not_found",
             "doi": doi,
-            "message": "could not reach the metadata service, so there is no "
-            "publisher link to try; check your connection and retry",
+            "mgetit_url": config.mgetit_url(doi) if doi else None,
+            "message": f"no record of {doi}; check the DOI, or use resolve to search by title",
         }
     if not publisher_url:
         return {
@@ -393,6 +414,8 @@ async def fetch_pdf(
 @mcp.tool()
 def proxy_url(url: str) -> dict:
     """Return the URL prefixed for U-M off-campus access (EZproxy)."""
+    if bad := _misconfigured():
+        return bad
     if not config.is_web_url(url):
         return {
             "status": "error",

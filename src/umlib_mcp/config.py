@@ -11,52 +11,133 @@ from urllib.parse import urlparse
 # changes the behaviour for every agent at once.
 CONFIG_FILE = Path(os.environ.get("UMLIB_CONFIG", "~/.umlib/config.toml")).expanduser()
 
+# Problems found while reading settings. Collected rather than raised: raising
+# at import stops the server from starting at all, and the user sees nothing
+# but their agent failing to connect. The tools report these instead.
+_PROBLEMS: list[str] = []
+
 
 def _load_file() -> dict:
+    """Never raises. A file we could not use is recorded, because silently
+    running on defaults is a hard thing to debug from the other end."""
     try:
         with open(CONFIG_FILE, "rb") as fh:
             data = tomllib.load(fh)
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}  # missing or malformed: fall back to defaults, never crash
-    return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}  # the ordinary case: no config file, all defaults
+    except OSError as e:
+        _PROBLEMS.append(
+            f"could not read {CONFIG_FILE} ({e.strerror or e}); using defaults"
+        )
+        return {}
+    except tomllib.TOMLDecodeError as e:
+        _PROBLEMS.append(f"{CONFIG_FILE} is not valid TOML ({e}); using defaults")
+        return {}
+    if not isinstance(data, dict):
+        _PROBLEMS.append(f"{CONFIG_FILE} is not a table of settings; using defaults")
+        return {}
+    return data
 
 
 _FILE = _load_file()
 
+# Settings go at the top level. Putting them all under a [header] is the common
+# TOML mistake, and having every one of them silently ignored is a bad way to
+# find that out.
+if _FILE and all(isinstance(v, dict) for v in _FILE.values()):
+    _PROBLEMS.append(
+        f"every setting in {CONFIG_FILE} sits under a [section] header, but umlib "
+        "reads top-level keys only, so none of them took effect"
+    )
 
-def setting(key: str, default, cast=str):
+
+def setting(key: str, default, cast=str, allow_empty: bool = False):
     """Resolve one setting: environment first, then the config file, then the
     built-in default. A bad value anywhere falls through instead of raising."""
     env = "UMLIB_" + key.upper()
-    for raw in (os.environ.get(env), _FILE.get(key)):
-        if raw is None or raw == "":
+    sources = (
+        ("the environment", os.environ.get(env)),
+        (str(CONFIG_FILE), _FILE.get(key)),
+    )
+    for source, raw in sources:
+        if raw is None:
+            continue
+        if isinstance(raw, str):
+            raw = raw.strip()  # a trailing newline in a config file is invisible
+        if raw == "":
+            # an explicit empty value means "switch this off" where that is
+            # supported, and "not set" everywhere else
+            if allow_empty:
+                return ""
+            continue
+        # TOML hands back real types, and a bool would sail straight through
+        # int() as 0 or 1 while a list would str() into something meaningless
+        if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+            _PROBLEMS.append(
+                f"{key} in {source} is not a usable value ({raw!r}); using the default"
+            )
             continue
         try:
             return cast(raw)
         except (ValueError, TypeError):
-            continue
+            _PROBLEMS.append(
+                f"{key} in {source} is not a usable value ({raw!r}); using the default"
+            )
     return default
 
 
 def _path(key: str, default: str) -> Path:
-    # resolve() so a relative override becomes absolute; the logout guard and
-    # the lock file both depend on knowing where this really points
-    return Path(setting(key, default)).expanduser().resolve()
+    """Never raises: an unusable path setting must not stop the server from
+    starting. expanduser() raises on an unknown ~user and resolve() raises on a
+    symlink loop, both of which are things a copied config file can carry."""
+    configured = setting(key, default)
+    for candidate in (configured, default):
+        try:
+            p = Path(candidate).expanduser()
+            # relative paths resolve against home, not the process working
+            # directory: for an MCP server that is wherever the agent happened
+            # to be started, which is not somewhere to put someone's PDFs
+            if not p.is_absolute():
+                p = Path.home() / p
+            return p.resolve()
+        except (RuntimeError, OSError, ValueError) as e:
+            if candidate == configured:
+                _PROBLEMS.append(
+                    f"{key} is not a usable path ({candidate!r}: {e}); using {default}"
+                )
+    return Path(default).absolute()  # last resort: no home directory at all
 
 
 # EZproxy prefix. U-M documents this exact pattern as the supported public
 # interface ("Create Links that Work"). Override for other institutions.
 PROXY_BASE = setting("proxy_base", "https://proxy.lib.umich.edu/login?url=")
-PROXY_HOST = urlparse(PROXY_BASE).hostname or ""
-# A bad proxy_base must not silently fall back to U-M, but raising here would
-# stop the server from starting at all and the user would only see their agent
-# fail to connect. Record it instead and let the tools report it.
-CONFIG_ERROR = (
-    ""
-    if PROXY_HOST
-    else f"proxy_base has no hostname: {PROXY_BASE!r} "
-    "(it should look like https://proxy.your-school.edu/login?url=)"
-)
+
+
+def _proxy_host(base: str) -> str:
+    """A bad proxy_base must not silently fall back to U-M, and must not take
+    the server down either: report it and let the tools refuse to run."""
+    try:
+        parts = urlparse(base)
+    except ValueError as e:
+        # an unbalanced "[" is an "Invalid IPv6 URL", and urlparse raises it
+        _PROBLEMS.append(f"proxy_base is not a usable URL ({base!r}: {e})")
+        return ""
+    if parts.scheme.lower() != "https":
+        _PROBLEMS.append(
+            f"proxy_base must start with https:// (got {base!r}); over plain http "
+            "the library session cookie would travel in the clear"
+        )
+        return ""
+    host = (parts.hostname or "").lower()
+    if not host:
+        _PROBLEMS.append(
+            f"proxy_base has no hostname: {base!r} "
+            "(it should look like https://proxy.your-school.edu/login?url=)"
+        )
+    return host
+
+
+PROXY_HOST = _proxy_host(PROXY_BASE)
 
 
 # EZproxy rewrites a licensed site onto a subdomain of the proxy host
@@ -70,15 +151,31 @@ def _default_rewrite_host(proxy_host: str) -> str:
 
 
 REWRITE_HOST = setting("rewrite_host", _default_rewrite_host(PROXY_HOST)).lower()
-PROXY_HOST = PROXY_HOST.lower()
 
 # U-M's link resolver. Schools using another resolver can point this elsewhere;
-# an empty value simply omits the fulfillment link from results.
+# an empty value omits the fulfillment link from results, which is why this one
+# accepts an explicit "" rather than reading it as "unset".
 RESOLVER_BASE = setting(
-    "resolver_base", "https://mgetit.lib.umich.edu/resolve?rft_id=info:doi/"
+    "resolver_base",
+    "https://mgetit.lib.umich.edu/resolve?rft_id=info:doi/",
+    allow_empty=True,
 )
 
 PROFILE_DIR = _path("profile_dir", "~/.umlib/profile")
+
+
+def _lock_dir() -> Path:
+    """Where the cross-process profile lock lives. Deliberately outside
+    PROFILE_DIR, which logout deletes: flock binds to the inode, so a lock file
+    removed while held lets the next process acquire the recreated path while
+    the first still holds the old one, and both then drive the same profile."""
+    try:
+        return (Path.home() / ".umlib" / "locks").resolve()
+    except (RuntimeError, OSError):
+        return Path(".umlib-locks").absolute()
+
+
+LOCK_DIR = _lock_dir()
 
 
 def _default_download_dir() -> str:
@@ -103,16 +200,24 @@ STATE_FILE = PROFILE_DIR / "session-state.json"
 # Optional. Open-access lookups work without it (OpenAlex needs no contact
 # address); setting it adds Unpaywall as a second source, which requires one.
 _EMAIL_RAW = setting("email", "")
-# it goes straight into a User-Agent header; a stray control character or
-# newline would break every metadata lookup and surface as "doi not found"
+# It goes straight into a User-Agent header, where a stray control character
+# makes httpx refuse to send at all and every metadata lookup then surfaces as
+# "doi not found". The local part is therefore the RFC atext set plus dot,
+# which admits no control characters rather than merely no whitespace.
 EMAIL = (
     _EMAIL_RAW.strip()
     if re.fullmatch(
-        r"[^@\s()<>,;:\\\"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", _EMAIL_RAW.strip()
+        r"[0-9A-Za-z!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+        _EMAIL_RAW.strip(),
     )
     else ""
 )
 EMAIL_INVALID = bool(_EMAIL_RAW.strip()) and not EMAIL
+if EMAIL_INVALID:
+    _PROBLEMS.append(
+        f"email is not a usable address ({_EMAIL_RAW.strip()!r}), so Unpaywall is "
+        "switched off; open-access lookups still work through OpenAlex"
+    )
 
 # Licensed-fetch pacing. The library's appropriate-use statement bars
 # systematic downloading but sets no number, so these are our own courtesy
@@ -134,6 +239,17 @@ LOGIN_WAIT_S = setting("login_wait_s", 150.0, float)
 CANARY_URL = setting("canary_url", "https://www.jstor.org/")
 
 USER_AGENT = f"umlib-mcp/0.1 (mailto:{EMAIL})" if EMAIL else "umlib-mcp/0.1"
+
+# Everything above has now been read, so this is the complete picture. Empty
+# when the configuration is fine.
+CONFIG_ERROR = "; ".join(_PROBLEMS)
+
+
+def unusable() -> str:
+    """The subset of CONFIG_ERROR that makes proxying impossible. A bad email
+    or an ignored setting is worth reporting but still leaves a working server;
+    a proxy_base we cannot parse does not."""
+    return CONFIG_ERROR if not PROXY_HOST else ""
 
 
 def is_web_url(url: str) -> bool:

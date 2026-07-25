@@ -6,10 +6,12 @@ from . import config
 
 
 class RateLimited(Exception):
-    def __init__(self, retry_after_s: float):
+    def __init__(self, retry_after_s: float, disabled: bool = False):
         self.retry_after_s = round(retry_after_s)
         super().__init__(
-            f"licensed-fetch rate cap reached ({config.MAX_FETCHES_PER_HOUR}/hour); "
+            "licensed fetches are switched off (max_fetches_per_hour is 0)"
+            if disabled
+            else f"licensed-fetch rate cap reached ({config.MAX_FETCHES_PER_HOUR}/hour); "
             f"retry in about {self.retry_after_s}s"
         )
 
@@ -25,7 +27,10 @@ _lock = asyncio.Lock()
 
 
 def _cap() -> int:
-    return max(1, config.MAX_FETCHES_PER_HOUR)
+    # 0 means the user switched licensed fetching off, and used to be silently
+    # read as 1; remaining_this_hour() agrees with this, so status and
+    # behaviour cannot disagree
+    return max(0, config.MAX_FETCHES_PER_HOUR)
 
 
 def _expire(now: float) -> None:
@@ -43,6 +48,8 @@ async def acquire() -> int:
     async with _lock:  # concurrent calls must not both pass the cap check
         now = time.time()
         _expire(now)
+        if _cap() <= 0:
+            raise RateLimited(0, disabled=True)
         if len(_slots) >= _cap():
             oldest = min(_slots.values())
             raise RateLimited(3600 - (now - oldest))
@@ -66,4 +73,4 @@ def refund(token: int | None) -> None:
 
 def remaining_this_hour() -> int:
     _expire(time.time())
-    return max(0, config.MAX_FETCHES_PER_HOUR - len(_slots))
+    return max(0, _cap() - len(_slots))

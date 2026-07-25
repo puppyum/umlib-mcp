@@ -28,32 +28,41 @@ class HostNotProxied(Exception):
 # covers most publishers; the selectors cover the stragglers (ScienceDirect
 # pdfft, Wiley/T&F/SAGE/ACM doi/pdf, Springer content/pdf).
 PDF_CANDIDATE_JS = r"""() => {
-  const out = [];
-  const push = (u) => { if (u && typeof u === 'string') out.push(u); };
-  const meta = document.querySelector('meta[name="citation_pdf_url"]');
-  push(meta && meta.content);
-  document.querySelectorAll('link[type="application/pdf"]').forEach((l) => push(l.href));
-  const sels = [
-    'a[href*="/pdfft"]',
-    'a[href*="/doi/pdf"]',
-    'a[href*="/doi/epdf"]',
-    'a[href*="/content/pdf/"]',
-    'a[href*=".pdf"]',
-    'a[href*="/stamp/stamp.jsp"]',
-    'a[href*="/pdfdirect"]',
-    'a[href*="downloadpdf"]',
-  ];
-  for (const s of sels) document.querySelectorAll(s).forEach((a) => push(a.href));
-  // some publishers only expose the PDF inside a viewer frame
-  document.querySelectorAll('iframe[src], embed[src], object[data]').forEach((el) => {
-    try {
-      const u = el.getAttribute('src') || el.getAttribute('data') || '';
-      // a malformed src makes new URL throw, and an exception here would
-      // lose every candidate we already collected
-      if (/\.pdf|pdfdirect|stamp\.jsp|\/doi\/pdf/i.test(u)) push(new URL(u, location.href).href);
-    } catch (e) { /* skip this element */ }
-  });
-  return [...new Set(out)].slice(0, 8);
+  try {
+    const out = [];
+    const push = (u) => { if (u && typeof u === 'string') out.push(u); };
+    const meta = document.querySelector('meta[name="citation_pdf_url"]');
+    push(meta && meta.content);
+    document.querySelectorAll('link[type="application/pdf"]').forEach((l) => push(l.href));
+    // Ordered most specific first. The list is capped downstream, so a page
+    // carrying a pile of ordinary .pdf links (author guides, supplements)
+    // would otherwise crowd out the one publisher-specific link that is
+    // actually the full text.
+    const sels = [
+      'a[href*="/pdfft"]',
+      'a[href*="/doi/pdf"]',
+      'a[href*="/doi/epdf"]',
+      'a[href*="/content/pdf/"]',
+      'a[href*="/stamp/stamp.jsp"]',
+      'a[href*="/pdfdirect"]',
+      'a[href*="downloadpdf"]',
+    ];
+    for (const s of sels) document.querySelectorAll(s).forEach((a) => push(a.href));
+    // some publishers only expose the PDF inside a viewer frame
+    document.querySelectorAll('iframe[src], embed[src], object[data]').forEach((el) => {
+      try {
+        const u = el.getAttribute('src') || el.getAttribute('data') || '';
+        // a malformed src makes new URL throw, and an exception here would
+        // lose every candidate we already collected
+        if (/\.pdf|pdfdirect|stamp\.jsp|\/doi\/pdf/i.test(u)) push(new URL(u, location.href).href);
+      } catch (e) { /* skip this element */ }
+    });
+    // the catch-all goes last, after every targeted source has had its turn
+    document.querySelectorAll('a[href*=".pdf"]').forEach((a) => push(a.href));
+    return [...new Set(out)];
+  } catch (e) {
+    return [];
+  }
 }"""
 
 
@@ -204,7 +213,15 @@ async def download_open_access(url: str) -> bytes | None:
         ):
             if r.status_code != 200 or _oversized(r.headers.get("content-length")):
                 return None
-            declared = r.headers.get("content-length")
+            # Only meaningful when the body is not encoded: aiter_bytes yields
+            # decompressed bytes, while Content-Length describes the compressed
+            # transfer, so comparing the two rejected every gzipped PDF - which
+            # is how plenty of OJS and DSpace repositories serve them.
+            declared = (
+                r.headers.get("content-length")
+                if not r.headers.get("content-encoding")
+                else None
+            )
             chunks, total = [], 0
             async for chunk in r.aiter_bytes():
                 total += len(chunk)

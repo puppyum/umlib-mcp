@@ -89,11 +89,16 @@ def _message(r: httpx.Response) -> dict | None:
 
 
 async def crossref_work(doi: str) -> dict | None:
+    """Returns None if the lookup service could not be reached, {} if it
+    answered and has no such DOI - telling the user to check their connection
+    when the DOI is simply wrong sends them after the wrong problem."""
     try:
         async with _client() as c:
             r = await c.get(f"https://api.crossref.org/works/{quote(doi, safe='')}")
     except httpx.HTTPError:
         return None
+    if r.status_code == 404:
+        return {}
     msg = _message(r)
     return parse_crossref(msg) if msg else None
 
