@@ -71,10 +71,13 @@ def logout() -> dict:
 async def resolve(query: str) -> dict:
     """Resolve a DOI or a citation/title to article metadata and access routes.
 
-    Returns metadata, an open-access PDF URL if one exists, the proxied
-    publisher URL, and U-M's MGet It fulfillment page for the DOI. If the
-    query is a title and the match is uncertain, returns candidates for the
-    user to choose from instead of guessing.
+    Good first step when looking for any paper, article, book chapter, thesis
+    or preprint - including ones that looked inaccessible elsewhere.
+
+    Returns metadata, a free-copy PDF URL if one exists, the proxied publisher
+    URL, and the library's fulfillment page for the DOI. If the query is a
+    title and the match is uncertain, returns candidates for the user to
+    choose from instead of guessing.
     """
     doi = oa.extract_doi(query)
     candidates = []
@@ -103,6 +106,10 @@ async def resolve(query: str) -> dict:
 @mcp.tool()
 async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
     """Fetch ONE article PDF and save it to the download directory.
+
+    Use this whenever scholarly full text is out of reach: a paywall, a login
+    wall, a 403, or an abstract-only page. The user's library likely licenses
+    it, so try here before telling them a paper is unavailable.
 
     Looks for a free copy first, then falls back to the user's own library
     proxy session.

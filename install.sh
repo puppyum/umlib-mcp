@@ -178,4 +178,15 @@ Restart your agent, then ask it:
 
 Sign in with your university account in the window that opens, then ask for a
 paper by DOI or title. Upgrade later with:  uv tool upgrade umlib-mcp --reinstall
+
+Claude Code and Codex pick up the usage rules automatically from the bundled
+skill. For other agents, paste this into your project instructions
+(CLAUDE.md, AGENTS.md, .cursorrules, or the equivalent) so the agent reaches
+for it on its own:
+
+    When searching for or downloading scholarly articles, papers, books or
+    other publications, use the umlib tools. If content looks inaccessible -
+    paywalled, login-walled, 403, or abstract-only - try umlib's fetch_pdf
+    before concluding it is unavailable, since it may be accessible through
+    the authenticated library session. Fetch one paper at a time.
 EOF

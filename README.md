@@ -70,6 +70,14 @@ Ask Claude to "log me into the library proxy", then finish the U-M Okta sign-in 
 
 PDFs save to `~/Downloads`. If the session expires you'll be asked to sign in again. If a publisher blocks the automated fetch, Claude hands you a link to open yourself.
 
+## Making the agent reach for it on its own
+
+Claude Code and Codex load the bundled skill automatically, so they already
+know to try umlib when a paper looks inaccessible. For other agents, paste this
+into your project instructions (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`, …):
+
+> When searching for or downloading scholarly articles, papers, books or other publications, use the umlib tools. If content looks inaccessible — paywalled, login-walled, 403, or abstract-only — try umlib's `fetch_pdf` before concluding it is unavailable, since it may be accessible through the authenticated library session. Fetch one paper at a time.
+
 ## One rule
 
 Fetch papers one at a time, as you need them (it limits itself to 8 an hour). Don't bulk-download reading lists: the library's [appropriate-use policy](https://lib.umich.edu/about-us/policies/statement-appropriate-use-electronic-resources) forbids systematic downloading, and publishers respond by cutting off the whole campus. For text or data mining at scale, contact library-ds@umich.edu.
