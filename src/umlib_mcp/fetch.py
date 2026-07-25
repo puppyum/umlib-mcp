@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import re
 from pathlib import Path
@@ -173,6 +174,7 @@ async def _fetch_via_proxy(proxied_url: str, publisher_host: str):
         page = await ctx.new_page()
         downloads = []
         page.on("download", lambda d: downloads.append(d))
+        aborted = False
         try:
             await page.goto(proxied_url, wait_until="domcontentloaded", timeout=45_000)
         except Exception as e:
@@ -180,6 +182,12 @@ async def _fetch_via_proxy(proxied_url: str, publisher_host: str):
             # rendering; that only happens once we're through the proxy
             if "Download is starting" not in str(e) and "ERR_ABORTED" not in str(e):
                 raise  # fetch_licensed refunds on the way out
+            aborted = True
+            # the download event races the goto rejection; give it a moment
+            for _ in range(30):
+                if downloads:
+                    break
+                await asyncio.sleep(0.1)
         if downloads:
             data = await _read_download(downloads[0])
             if data.startswith(b"%PDF"):
@@ -189,6 +197,12 @@ async def _fetch_via_proxy(proxied_url: str, publisher_host: str):
         # busy pages never go idle; the DOM is enough
         with contextlib.suppress(Exception):
             await page.wait_for_load_state("networkidle", timeout=10_000)
+
+        if aborted:
+            # the navigation was replaced by a download that never arrived;
+            # page.url is about:blank, which says nothing about the session,
+            # so do not misreport this as "you are signed out"
+            raise NoPdfFound(proxied_url)
 
         if not browser.is_proxied_url(page.url):
             ratelimit.refund()  # never got past the proxy: not a licensed fetch

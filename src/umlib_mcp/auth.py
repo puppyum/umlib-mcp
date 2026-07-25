@@ -146,10 +146,20 @@ def clear_session() -> dict:
             "message": "a browser session is in use; finish or close it first",
         }
     p = config.PROFILE_DIR
-    if not (config.PROFILE_MARKER.exists() and p.is_relative_to(p.home())):
+    home = p.home()
+    # the marker alone is not enough: ensure_profile_dir() drops it wherever
+    # UMLIB_PROFILE_DIR points, so a profile dir set to $HOME would otherwise
+    # make this an rm -rf of the user's home
+    unsafe = (
+        p == home
+        or home.is_relative_to(p)
+        or p == p.parent  # filesystem root
+        or len(p.relative_to(home).parts) < 1
+    )
+    if unsafe or not (config.PROFILE_MARKER.exists() and p.is_relative_to(home)):
         return {
             "cleared": False,
-            "message": f"refusing to delete {p}: not a profile this tool created",
+            "message": f"refusing to delete {p}: not a profile directory this tool owns",
         }
     global _last_result
     shutil.rmtree(p, ignore_errors=True)

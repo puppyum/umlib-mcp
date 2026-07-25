@@ -15,11 +15,26 @@ DRY_RUN=0
 STAMP="$(date +%Y%m%d%H%M%S)"
 REGISTERED=()
 SKIPPED=()
+MANUAL=()
 
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
-    --help|-h) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --help|-h)
+      # $0 is the shell itself when piped from curl, so print the text rather
+      # than reading it back out of the file
+      cat <<'USAGE'
+Install umlib-mcp and register it with whichever AI coding agents you have.
+
+  curl -LsSf https://raw.githubusercontent.com/puppyum/umlib-mcp/main/install.sh | bash
+
+Flags:
+  --dry-run   show what would change, touch nothing
+  --help      this message
+
+When piping, pass flags after -s --, e.g. ... | bash -s -- --dry-run
+USAGE
+      exit 0 ;;
     *) echo "unknown flag: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -96,7 +111,7 @@ register_json() {
   fi
   # a broken config for one agent must not abort the whole install
   if ! BIN="$BIN" FILE="$file" KEY="$key" WANT_TYPE="$want_type" NAME="$NAME" \
-    uv run --no-project python - <<'PY'
+    uv run --no-project python - 2>/dev/null <<'PY'
 import json, os, pathlib
 path = pathlib.Path(os.environ["FILE"])
 key, name = os.environ["KEY"], os.environ["NAME"]
@@ -114,7 +129,11 @@ path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(data, indent=2) + "\n")
 PY
   then
-    SKIPPED+=("$label (config unreadable, left untouched)")
+    # Zed and VS Code configs commonly carry // comments, which are not JSON.
+    # Rewriting them would throw the comments away, so hand the entry back
+    # for the user to paste instead.
+    SKIPPED+=("$label (see the entry to paste below)")
+    MANUAL+=("$label|$file|$key")
     return
   fi
   say "registered in $file"
@@ -194,6 +213,14 @@ else
 fi
 [ ${#SKIPPED[@]} -gt 0 ] && say "skipped: $(printf '%s, ' "${SKIPPED[@]}" | sed 's/, $//')"
 
+# a config we could not parse (usually because it has comments) gets the
+# snippet printed rather than rewritten, so nothing of the user's is lost
+for entry in ${MANUAL+"${MANUAL[@]}"}; do
+  label="${entry%%|*}"; rest="${entry#*|}"; file="${rest%%|*}"; key="${rest##*|}"
+  printf '\n  %s keeps comments in its config, so add this to %s by hand:\n' "$label" "$file"
+  printf '    "%s": { "umlib": { "command": "%s" } }\n' "$key" "$BIN"
+done
+
 cat <<EOF
 
 Restart your agent, then ask it:
@@ -203,10 +230,10 @@ Restart your agent, then ask it:
 Sign in with your university account in the window that opens, then ask for a
 paper by DOI or title. Upgrade later with:  uv tool upgrade umlib-mcp --reinstall
 
-Claude Code and Codex pick up the usage rules automatically from the bundled
-skill. For other agents, paste this into your project instructions
-(CLAUDE.md, AGENTS.md, .cursorrules, or the equivalent) so the agent reaches
-for it on its own:
+Paste this into your project instructions (CLAUDE.md, AGENTS.md, .cursorrules,
+or the equivalent) so your agent reaches for the tools on its own. Installing
+via the plugin instead (/plugin install umlib@umlib-lab in Claude Code or
+Codex) bundles the same guidance as a skill, and then you can skip this:
 
     When searching for or downloading scholarly articles, papers, books or
     other publications, use the umlib tools. If content looks inaccessible -

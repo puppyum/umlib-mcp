@@ -183,7 +183,15 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
         if oa_info and oa_info.get("pdf_url"):
             data = await fetch.download_open_access(oa_info["pdf_url"])
             if data:
-                path = fetch.save_pdf(data, name)
+                try:
+                    path = fetch.save_pdf(data, name)
+                except OSError as e:
+                    return {
+                        "status": "error",
+                        "code": "save_failed",
+                        "message": f"fetched the PDF but could not save it to {config.DOWNLOAD_DIR}: {e}",
+                        "url_used": oa_info["pdf_url"],
+                    }
                 return {
                     "status": "ok",
                     "source": "open_access",
@@ -242,7 +250,15 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
             "detail": str(e),
             "manual_url": config.proxied(publisher_url),
         }
-    path = fetch.save_pdf(data, name)
+    try:
+        path = fetch.save_pdf(data, name)
+    except OSError as e:  # disk full, unwritable dir: don't lose the fetch silently
+        return {
+            "status": "error",
+            "code": "save_failed",
+            "message": f"fetched the PDF but could not save it to {config.DOWNLOAD_DIR}: {e}",
+            "url_used": used,
+        }
     return {
         "status": "ok",
         "source": "library_proxy",

@@ -122,6 +122,45 @@ def test_oversized_helper(monkeypatch):
     assert not fetch._oversized("not-a-number")
 
 
+def test_logout_refuses_dangerous_profile_dirs(tmp_path, monkeypatch):
+    """The marker file alone is not a safe guard: ensure_profile_dir() writes
+    it wherever UMLIB_PROFILE_DIR points, so $HOME must be rejected outright."""
+    from pathlib import Path
+
+    from umlib_mcp import auth
+
+    home = tmp_path / "home"
+    (home / ".umlib" / "profile").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    # marker present and inside home, yet each of these must still be refused
+    for dangerous in (home, home.parent):
+        monkeypatch.setattr(config, "PROFILE_DIR", dangerous)
+        monkeypatch.setattr(config, "PROFILE_MARKER", dangerous / ".umlib-managed")
+        config.PROFILE_MARKER.touch(exist_ok=True)
+        assert auth.clear_session()["cleared"] is False
+        assert dangerous.exists(), f"{dangerous} was deleted"
+
+    # the filesystem root, without touching it
+    monkeypatch.setattr(config, "PROFILE_DIR", Path(home.anchor))
+    monkeypatch.setattr(config, "PROFILE_MARKER", Path(home.anchor) / ".umlib-managed")
+    assert auth.clear_session()["cleared"] is False
+
+    # a real profile under home is still removable
+    good = home / ".umlib" / "profile"
+    monkeypatch.setattr(config, "PROFILE_DIR", good)
+    monkeypatch.setattr(config, "PROFILE_MARKER", good / ".umlib-managed")
+    config.PROFILE_MARKER.touch()
+    assert auth.clear_session()["cleared"] is True
+    assert not good.exists()
+
+
+def test_release_file_lock_is_idempotent():
+    from umlib_mcp import browser
+
+    browser._release_file_lock(9999)  # never held: must be a no-op, not a close
+
+
 def test_extract_doi_strips_url_query_and_fragment():
     assert (
         oa.extract_doi("https://dl.acm.org/doi/10.1145/3359252?ref=nav#abstract")

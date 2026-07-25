@@ -95,6 +95,9 @@ async def _save_state(ctx) -> None:
             os.chmod(config.STATE_FILE, 0o600)
 
 
+_held_locks: set[int] = set()
+
+
 def _lock_path():
     return config.PROFILE_DIR.parent / "umlib.lock"
 
@@ -109,6 +112,7 @@ def _acquire_file_lock(timeout: float = 120.0):
     while True:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _held_locks.add(fd)
             return fd
         except OSError:
             if time.monotonic() > deadline:
@@ -120,6 +124,11 @@ def _acquire_file_lock(timeout: float = 120.0):
 
 
 def _release_file_lock(fd) -> None:
+    # idempotent: closing a stale fd number could unlock or close something
+    # else entirely that has since been assigned that descriptor
+    if fd not in _held_locks:
+        return
+    _held_locks.discard(fd)
     with contextlib.suppress(Exception):
         fcntl.flock(fd, fcntl.LOCK_UN)
     with contextlib.suppress(Exception):
@@ -156,13 +165,15 @@ async def session(headless: bool = True):
         try:
             yield ctx
         finally:
-            # session cookies live only in memory, so snapshot them before
-            # the context goes away; a close error must never overwrite a
-            # good result the caller already produced inside the context
-            await _save_state(ctx)
-            with contextlib.suppress(Exception):
-                await ctx.close()
-            _release_file_lock(fd)
+            # the release needs its own finally: a client cancelling a tool
+            # call re-raises at the first await in here, and anything that
+            # escapes would strand the lock and wedge every umlib process
+            try:
+                await _save_state(ctx)
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(ctx.close(), timeout=30)
+            finally:
+                _release_file_lock(fd)
 
 
 def session_active() -> bool:
