@@ -104,12 +104,19 @@ async def resolve(query: str) -> dict:
 async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
     """Fetch ONE article PDF and save it to the download directory.
 
-    Tries open access first, then the user's own U-M proxy session. Fetch one
-    paper per user request; never loop over a bibliography or search results
-    (systematic downloading violates the library's appropriate-use policy and
-    triggers publisher blocks). If the result is needs_login, ask the user to
-    run the login tool. If a publisher blocks the automated fetch, give the
-    user manual_url to click themselves.
+    Looks for a free copy first, then falls back to the user's own library
+    proxy session.
+
+    Call this for a single paper the user actually asked for. Do NOT loop it
+    over a bibliography, a reference list, or search results: systematic
+    downloading breaks the library's appropriate-use policy and gets publisher
+    access cut off for the whole institution, not just this user. If the user
+    wants many papers, ask them to pick the one or two that matter now.
+
+    On `needs_login`, call the login tool, tell the user to sign in, then call
+    this again immediately - it waits for the sign-in by itself, so do not ask
+    the user to report back. On `no_pdf_found` or `host_not_proxied`, give the
+    user the returned URL to open themselves rather than retrying.
     """
     if auth.login_active():
         # wait for the user to finish signing in rather than making them

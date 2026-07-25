@@ -13,9 +13,19 @@ Let Claude read papers using your own University of Michigan library access. Whe
 | `proxy_url` | Prefixes a URL for off-campus access. |
 | `logout` | Deletes the saved session. |
 
+Works with any MCP client: Claude Code, Codex, Cursor, VS Code (Copilot), Zed, Windsurf, Gemini CLI, and Claude Desktop.
+
 ## Install
 
-### Easiest: ask Claude to do it
+### One command, any agent
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/puppyum/umlib-mcp/main/install.sh | bash
+```
+
+It installs [uv](https://docs.astral.sh/uv/) if you don't have it, installs the server, and registers it with every agent it finds on your machine. Run it with `--dry-run` first if you'd like to see what it would change; it backs up any config it edits and leaves the rest alone.
+
+### Easiest on Claude Code or Codex: ask the agent to do it
 
 Paste this into Claude Code:
 
@@ -23,18 +33,22 @@ Paste this into Claude Code:
 
 It installs the prerequisite, adds the plugin, and opens the sign-in window for you. If the tools don't show up afterwards, run `/reload-plugins` or restart Claude Code.
 
-### Or do it yourself
+### Or add it as a plugin
 
-Install [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`), then in Claude Code:
+Claude Code and Codex both read the same plugin marketplace, so in either one:
 
 ```
 /plugin marketplace add puppyum/umlib-mcp
 /plugin install umlib@umlib-lab
 ```
 
-There is nothing else to configure. Dependencies install on first launch, the free-copy check works out of the box, and the server downloads its browser (~150 MB, once per machine) in the background as soon as it starts.
+There is nothing to configure. Dependencies install on first launch, the free-copy check works out of the box, and the server downloads its browser (~150 MB, once per machine) in the background as soon as it starts.
 
-**Claude Desktop:** Settings → Developer → Edit Config. Use an absolute path to `uvx` (find it with `which uvx`):
+### Or register it by hand
+
+Install it once with `uv tool install git+https://github.com/puppyum/umlib-mcp`, then point your client at the resulting binary (`uv tool dir --bin` tells you where it landed). Every client takes the same command with no arguments; only the surrounding key differs — `mcpServers` for Cursor, Windsurf, Gemini CLI and Claude Desktop, `servers` for VS Code, `context_servers` for Zed.
+
+**Claude Desktop (manual):** Settings → Developer → Edit Config. Use an absolute path to `uvx` (find it with `which uvx`):
 
 ```json
 {
