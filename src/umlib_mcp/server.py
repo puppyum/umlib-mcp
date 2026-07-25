@@ -102,7 +102,14 @@ async def resolve(query: str) -> dict:
         if not candidates:
             return {"status": "error", "code": "no_matches", "query": query}
         meta = candidates[0]
-        doi = meta["doi"]
+        doi = meta.get("doi")
+        if not doi:  # Crossref occasionally returns records with no DOI
+            return {
+                "status": "error",
+                "code": "no_matches",
+                "query": query,
+                "message": "the closest match has no DOI; try a more specific title",
+            }
     result = {"status": "ok", **meta}
     oa_info = await oa.open_access(doi)
     result["open_access"] = oa_info or {"is_oa": None, "note": "check skipped"}

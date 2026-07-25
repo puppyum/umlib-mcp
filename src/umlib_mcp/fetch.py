@@ -69,11 +69,13 @@ def prepare_candidates(
 
 
 def slugify_filename(title: str | None, year, doi: str | None) -> str:
+    slug = ""
     if title:
+        # a title in a non-Latin script slugifies to nothing, so fall through
         slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60].rstrip("-")
-    elif doi:
+    if not slug and doi:
         slug = re.sub(r"[^a-z0-9.]+", "_", doi.lower())
-    else:
+    if not slug:
         slug = "article"
     return f"{slug}-{year}.pdf" if year else f"{slug}.pdf"
 

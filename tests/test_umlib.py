@@ -122,6 +122,31 @@ def test_oversized_helper(monkeypatch):
     assert not fetch._oversized("not-a-number")
 
 
+def test_extract_doi_strips_url_query_and_fragment():
+    assert (
+        oa.extract_doi("https://dl.acm.org/doi/10.1145/3359252?ref=nav#abstract")
+        == "10.1145/3359252"
+    )
+    assert oa.extract_doi("10.1080/1369118X.2021.1899282?needAccess=true") == (
+        "10.1080/1369118X.2021.1899282"
+    )
+
+
+def test_slugify_falls_back_to_doi_for_non_latin_titles():
+    # a title that slugifies to nothing must not produce a nameless file
+    assert (
+        fetch.slugify_filename("日本語のタイトル", 2024, "10.1/x") == "10.1_x-2024.pdf"
+    )
+    assert fetch.slugify_filename("", None, None) == "article.pdf"
+
+
+def test_malformed_numeric_env_falls_back(monkeypatch):
+    monkeypatch.setenv("UMLIB_MAX_FETCHES_PER_HOUR", "banana")
+    assert config._num("UMLIB_MAX_FETCHES_PER_HOUR", 8, int) == 8
+    monkeypatch.setenv("UMLIB_MAX_FETCHES_PER_HOUR", "12")
+    assert config._num("UMLIB_MAX_FETCHES_PER_HOUR", 8, int) == 12
+
+
 def test_ratelimit_refund_restores_a_slot(monkeypatch):
     from umlib_mcp import ratelimit
 

@@ -12,7 +12,9 @@ def extract_doi(text: str) -> str | None:
     m = DOI_RE.search(text or "")
     if not m:
         return None
-    doi = m.group(0)
+    # a DOI lifted out of a publisher URL picks up the query string and
+    # fragment with it, which no lookup service will match
+    doi = m.group(0).split("?")[0].split("#")[0]
     # trim trailing punctuation, but keep closers that are balanced inside
     # the DOI itself (e.g. 10.1016/0167-2789(92)90242-F)
     prev = None

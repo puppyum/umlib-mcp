@@ -9,8 +9,23 @@ PROXY_BASE = os.environ.get(
 )
 PROXY_HOST = urlparse(PROXY_BASE).hostname or "proxy.lib.umich.edu"
 
-PROFILE_DIR = Path(os.environ.get("UMLIB_PROFILE_DIR", "~/.umlib/profile")).expanduser()
-DOWNLOAD_DIR = Path(os.environ.get("UMLIB_DOWNLOAD_DIR", "~/Downloads")).expanduser()
+
+def _path(env: str, default: str) -> Path:
+    # resolve() so a relative override becomes absolute; the logout guard and
+    # the lock file both depend on knowing where this really points
+    return Path(os.environ.get(env, default)).expanduser().resolve()
+
+
+def _num(env: str, default, cast):
+    """A typo in an env var should not stop the server from starting."""
+    try:
+        return cast(os.environ[env])
+    except (KeyError, ValueError, TypeError):
+        return default
+
+
+PROFILE_DIR = _path("UMLIB_PROFILE_DIR", "~/.umlib/profile")
+DOWNLOAD_DIR = _path("UMLIB_DOWNLOAD_DIR", "~/Downloads")
 
 # A file we drop inside a profile dir we created, so logout only ever deletes
 # a directory this tool owns (not, say, a user's real folder that happens to
@@ -30,16 +45,16 @@ EMAIL = os.environ.get("UMLIB_EMAIL", "")
 # Licensed-fetch pacing. Individual on-demand retrieval only; U-M's
 # "Appropriate Use of Electronic Resources" statement prohibits systematic
 # downloading, and publishers block on volume anomalies.
-MAX_FETCHES_PER_HOUR = int(os.environ.get("UMLIB_MAX_FETCHES_PER_HOUR", "8"))
-MIN_FETCH_INTERVAL_S = float(os.environ.get("UMLIB_MIN_FETCH_INTERVAL_S", "20"))
+MAX_FETCHES_PER_HOUR = _num("UMLIB_MAX_FETCHES_PER_HOUR", 8, int)
+MIN_FETCH_INTERVAL_S = _num("UMLIB_MIN_FETCH_INTERVAL_S", 20.0, float)
 
 # Reject anything larger than this before saving; a PDF article is a few MB.
-MAX_PDF_BYTES = int(os.environ.get("UMLIB_MAX_PDF_BYTES", str(100 * 1024 * 1024)))
+MAX_PDF_BYTES = _num("UMLIB_MAX_PDF_BYTES", 100 * 1024 * 1024, int)
 
-LOGIN_TIMEOUT_S = int(os.environ.get("UMLIB_LOGIN_TIMEOUT_S", "300"))
+LOGIN_TIMEOUT_S = _num("UMLIB_LOGIN_TIMEOUT_S", 300, int)
 # How long a fetch will sit waiting for an in-flight sign-in before giving up
 # and asking the user to retry.
-LOGIN_WAIT_S = float(os.environ.get("UMLIB_LOGIN_WAIT_S", "150"))
+LOGIN_WAIT_S = _num("UMLIB_LOGIN_WAIT_S", 150.0, float)
 CANARY_URL = os.environ.get("UMLIB_CANARY_URL", "https://www.jstor.org/")
 
 MGETIT_BASE = "https://mgetit.lib.umich.edu/resolve?rft_id=info:doi/"
