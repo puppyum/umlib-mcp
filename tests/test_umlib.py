@@ -912,3 +912,60 @@ def test_logout_clears_the_cached_login_result(tmp_path, monkeypatch):
     assert auth.last_login_result() is None
     # and it names the path, since a profile may exist somewhere else
     assert str(tmp_path / "absent") in out["message"]
+
+
+def test_login_tells_the_user_there_is_no_confirmation(monkeypatch):
+    """The window closing is the only signal the user gets. Without saying so,
+    a successful sign-in looks exactly like a failed one."""
+    import asyncio
+
+    from umlib_mcp import auth
+
+    monkeypatch.setattr(auth, "_login_task", None)
+    monkeypatch.setattr(auth, "_no_display", lambda: "")
+
+    async def go():
+        async def never():
+            await asyncio.sleep(60)
+
+        monkeypatch.setattr(auth, "_run_login", never)
+        return auth.start_login()
+
+    out = asyncio.run(go())
+    assert out["started"]
+    assert "nothing to wait for" in out["tell_user"]
+    # and the assistant is told not to stop here
+    assert "auth_status" in out["next_step"]
+
+
+def test_login_warns_about_the_first_run_download(monkeypatch):
+    import asyncio
+
+    from umlib_mcp import auth
+
+    monkeypatch.setattr(auth, "_login_task", None)
+    monkeypatch.setattr(auth, "_no_display", lambda: "")
+
+    async def never():
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(auth, "_run_login", never)
+
+    monkeypatch.setattr(browser, "browser_ready", lambda: False)
+    assert "downloads" in asyncio.run(_start(auth))["tell_user"]
+    monkeypatch.setattr(browser, "browser_ready", lambda: True)
+    assert "downloads" not in asyncio.run(_start(auth))["tell_user"]
+
+
+async def _start(auth):
+    auth._login_task = None
+    return auth.start_login()
+
+
+def test_browser_ready_never_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path / "nope"))
+    assert browser.browser_ready() is False
+    (tmp_path / "yes").mkdir()
+    (tmp_path / "yes" / "chromium-1234").mkdir()
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path / "yes"))
+    assert browser.browser_ready() is True

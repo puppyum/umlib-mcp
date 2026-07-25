@@ -20,10 +20,13 @@ try `fetch_pdf` first, because the user's library likely licenses it.
    appropriate-use policy and gets publisher access cut off for the whole
    institution. If the user wants many papers, have them pick the one or two
    that matter now.
-4. On `needs_login`: call `login`, tell the user to sign in with their
-   university account in the window that opens, then call `fetch_pdf` again
-   straight away. It waits for the sign-in by itself, so don't ask the user to
-   report back. Only check in if you get `login_in_progress`.
+4. On `needs_login`: call `login`, pass on its `tell_user` text, then call
+   `fetch_pdf` again **in the same turn**. It waits for the sign-in by itself,
+   so don't ask the user to report back. Never stop your turn straight after
+   `login`: the window closing is the only signal the user gets, so going quiet
+   there reads as failure even when the sign-in worked. If there is no paper to
+   fetch yet, call `auth_status` instead to confirm it. Only check in if you get
+   `login_in_progress`.
 5. On `no_pdf_found`, `host_not_proxied`, or a blocked fetch: give the user the
    returned URL to open themselves. Don't retry in a loop and don't attempt
    workarounds.

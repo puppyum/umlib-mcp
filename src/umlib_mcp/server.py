@@ -141,9 +141,14 @@ async def auth_status(live_check: bool = True, wait_for_login: bool = True) -> d
 async def login() -> dict:
     """Open a real browser window for the user to sign in to the U-M library
     proxy (Okta sign-in + Okta Verify). Returns immediately while the window
-    stays open. Tell the user to sign in, then just call fetch_pdf (or
-    auth_status) again right away: those calls wait for the sign-in to finish
-    on their own, so there is no need to ask the user when they are done.
+    stays open.
+
+    DO NOT END YOUR TURN AFTER CALLING THIS. Pass the returned `tell_user` text
+    on, then call auth_status (or fetch_pdf, if a paper was already asked for)
+    in the same turn. Both block until the sign-in finishes, so they confirm it
+    for you. The user gets no notification when the window closes, so stopping
+    here leaves them staring at a closed window with no idea whether it worked.
+
     Credentials never pass through Claude or this server; only the browser
     session cookie is kept, in a local profile owned by this user.
     """

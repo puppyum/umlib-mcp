@@ -14,7 +14,9 @@ One command. It installs everything and registers it with whichever assistants y
 curl -LsSf https://raw.githubusercontent.com/puppyum/umlib-mcp/main/install.sh | bash
 ```
 
-Restart your assistant, then say **"log me into the library proxy"** and sign in with your U-M account in the window that opens. That's the whole setup.
+Restart your assistant, then say **"log me into the UMich library proxy"** and sign in with your U-M account in the window that opens. That's the whole setup.
+
+The first time, the window can take a minute to appear while the browser it drives downloads (~150 MB, once per user account). The window closes itself when you're done and you won't get a separate confirmation, so there's nothing to wait for: just ask for a paper.
 
 macOS and Linux. On Windows, use WSL.
 

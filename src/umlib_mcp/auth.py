@@ -156,14 +156,29 @@ def start_login() -> dict:
         # avoids promising a window that cannot open
         return {"started": False, "message": msg}
     _login_task = asyncio.get_running_loop().create_task(_run_login())
+    first_run = not browser.browser_ready()
     return {
         "started": True,
+        "tell_user": (
+            "A browser window is opening"
+            + (
+                " (first run, so it may take a minute while the browser downloads)"
+                if first_run
+                else ""
+            )
+            + f". Sign in there with {SIGN_IN}. The window closes itself when you are "
+            "done, and nothing further appears on this end, so there is nothing to "
+            "wait for or report back."
+        ),
+        # The window closing is the only signal the user gets. Without this the
+        # assistant goes quiet after login, the user sees a closed window and no
+        # message, and reasonably concludes the sign-in failed.
+        "next_step": "call auth_status now: it blocks until the sign-in finishes and "
+        "then confirms it, or go straight to fetch_pdf if a paper was already asked "
+        "for. Do not end your turn here.",
         "message": (
-            f"opening a browser window (it may wait a moment for any fetch already "
-            f"running). Complete {SIGN_IN} in it within about "
-            f"{config.LOGIN_TIMEOUT_S // 60} minutes; it closes itself when done. "
-            f"The next fetch waits for this automatically, so just go ahead and "
-            f"ask for the paper."
+            f"opening a browser window. Complete {SIGN_IN} within about "
+            f"{config.LOGIN_TIMEOUT_S // 60} minutes; it closes itself when done."
         ),
     }
 

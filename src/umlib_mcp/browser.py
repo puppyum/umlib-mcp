@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
@@ -62,6 +63,25 @@ def _install_chromium() -> None:
         raise RuntimeError(
             f"playwright install chromium failed: {proc.stderr.strip()[-400:]}"
         )
+
+
+def browser_ready() -> bool:
+    """Whether chromium is already downloaded. A first run has to fetch ~150MB
+    before the sign-in window can appear, and a login that looks like it hung
+    is worth a word of warning."""
+    if base := os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        root = Path(base)
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library" / "Caches" / "ms-playwright"
+    elif sys.platform.startswith("win"):
+        root = Path(os.environ.get("LOCALAPPDATA", "~")).expanduser() / "ms-playwright"
+    else:
+        cache = os.environ.get("XDG_CACHE_HOME") or "~/.cache"
+        root = Path(cache).expanduser() / "ms-playwright"
+    try:
+        return any(p.name.startswith("chromium") for p in root.iterdir())
+    except OSError:
+        return False
 
 
 def preinstall_chromium() -> None:

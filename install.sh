@@ -237,7 +237,7 @@ cat <<EOF
 Two steps left:
 
   1. Restart your assistant.
-  2. Ask it: log me into the library proxy
+  2. Ask it: log me into the UMich library proxy
 
 Sign in with your university account in the window that opens, then ask for a
 paper by DOI or title. Upgrade later with: uv tool upgrade umlib-mcp --reinstall
