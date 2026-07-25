@@ -149,7 +149,10 @@ def _acquire_file_lock(timeout: float | None = None):
     # only the parent: creating PROFILE_DIR here would leave a stray profile
     # behind after logout and defeat the "no session yet" fast path
     _lock_path().parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+    # O_NOFOLLOW: for a custom profile_dir the parent may be a shared directory,
+    # where someone else could plant a symlink at the lock path and have us
+    # open whatever it points at
+    fd = os.open(_lock_path(), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -267,18 +270,30 @@ def host_of(url: str) -> str:
 AUTH_PATHS = ("/login", "/menu/login", "/logout", "/idp/", "/adfs/", "/oauth2/")
 
 
+def _is_rewritten_site(host: str) -> bool:
+    """EZproxy encodes the publisher's dots as hyphens (www.jstor.org becomes
+    www-jstor-org), so a hyphen in the first label marks a rewritten licensed
+    site rather than a host belonging to the proxy or its identity provider."""
+    return "-" in host.split(".", 1)[0]
+
+
 def is_proxied_url(url: str) -> bool:
     """True once EZproxy has rewritten us onto a licensed host.
 
-    A sign-in page never counts, whichever host it is on. Binding that
-    exclusion to the proxy host alone was not enough: at an OCLC school the
-    sign-in host is a subdomain of the rewrite host, and at a school whose
-    proxy rewrites onto the campus apex the SSO provider usually lives there
-    too. Either way the sign-in page looked like licensed content, so status
-    reported a session nobody had and the login window closed before the user
-    had signed in.
+    The proxy's own sign-in pages never count, and neither does the SSO
+    provider it hands off to: at an OCLC school the sign-in host is a
+    subdomain of the rewrite host, and where the proxy rewrites onto the
+    campus apex the identity provider usually sits there too. Both used to
+    look like licensed content, so status reported a session nobody had.
+
+    That path check must not reach rewritten publisher hosts, though.
+    EBSCOhost serves its permalinks from /login.aspx, and treating those as a
+    sign-in page sends the user to log in when they are already reading the
+    article.
     """
     host = host_of(url)
     if host != config.PROXY_HOST and not host.endswith("." + config.REWRITE_HOST):
         return False
+    if host != config.PROXY_HOST and _is_rewritten_site(host):
+        return True  # licensed content, whatever its path happens to be
     return not urlparse(url).path.startswith(AUTH_PATHS)

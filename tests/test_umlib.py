@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -811,3 +813,102 @@ def test_logout_with_no_session_is_not_reported_as_a_refusal(tmp_path, monkeypat
     out = auth.clear_session()
     assert out["cleared"] is True
     assert "refusing" not in out["message"]
+
+
+# --- regressions found in the 6f17545 batch ----------------------------------
+
+
+def test_rewritten_publisher_paths_are_not_mistaken_for_sign_in_pages(monkeypatch):
+    """EBSCOhost serves its permalinks from /login.aspx. Applying the auth-path
+    exclusion to rewritten publisher hosts sent users to sign in when they were
+    already looking at the licensed article."""
+    monkeypatch.setattr(config, "PROXY_HOST", "proxy.lib.umich.edu")
+    monkeypatch.setattr(config, "REWRITE_HOST", "proxy.lib.umich.edu")
+    assert browser.is_proxied_url(
+        "https://search-ebscohost-com.proxy.lib.umich.edu/login.aspx?direct=true&db=aph"
+    )
+    assert browser.is_proxied_url(
+        "https://www-jstor-org.proxy.lib.umich.edu/stable/24265183"
+    )
+    # the proxy's own sign-in and logout pages still do not count
+    assert not browser.is_proxied_url("https://proxy.lib.umich.edu/login?url=x")
+    assert not browser.is_proxied_url("https://proxy.lib.umich.edu/logout")
+
+
+def test_sso_handoff_is_still_excluded_on_a_rewrite_apex(monkeypatch):
+    """The identity provider sits on a plain label, a rewritten site on a
+    hyphen-encoded one, so the two stay distinguishable."""
+    monkeypatch.setattr(config, "PROXY_HOST", "ezproxy.school.edu")
+    monkeypatch.setattr(config, "REWRITE_HOST", "school.edu")
+    assert not browser.is_proxied_url(
+        "https://weblogin.school.edu/idp/profile/SAML2/Redirect/SSO"
+    )
+    assert browser.is_proxied_url("https://www-jstor-org.school.edu/stable/1")
+    assert browser.is_proxied_url("https://search-ebscohost-com.school.edu/login.aspx")
+
+
+def test_resolve_falls_back_to_open_access_for_a_datacite_doi():
+    """Crossref 404s every arXiv, Zenodo, OSF and figshare DOI. Returning
+    doi_not_found for those told the user to check a DOI that was fine, and
+    skipped the open-access lookup that would have found the paper."""
+    import asyncio
+
+    from umlib_mcp import server
+
+    async def no_crossref_record(doi):
+        return {}
+
+    async def has_free_copy(doi):
+        return {"is_oa": True, "pdf_url": "https://arxiv.org/pdf/2005.14165"}
+
+    async def no_free_copy(doi):
+        return None
+
+    orig_work, orig_oa = oa.crossref_work, oa.open_access
+    try:
+        oa.crossref_work = no_crossref_record
+        oa.open_access = has_free_copy
+        out = asyncio.run(server.resolve("10.48550/arXiv.2005.14165"))
+        assert out["status"] == "ok"
+        assert out["open_access"]["pdf_url"].endswith("2005.14165")
+
+        # a DOI that genuinely does not exist anywhere is still an error
+        oa.open_access = no_free_copy
+        out = asyncio.run(server.resolve("10.1145/nope"))
+        assert out["code"] == "doi_not_found"
+    finally:
+        oa.crossref_work, oa.open_access = orig_work, orig_oa
+
+
+def test_logout_works_when_home_is_a_symlink(tmp_path, monkeypatch):
+    """PROFILE_DIR is resolved but Path.home() was not, so is_relative_to was
+    false for everyone whose home is a symlink and logout refused forever."""
+    from umlib_mcp import auth
+
+    real = tmp_path / "realhome"
+    (real / ".umlib" / "profile").mkdir(parents=True)
+    link = tmp_path / "linkhome"
+    link.symlink_to(real)
+    profile = (real / ".umlib" / "profile").resolve()
+    monkeypatch.setattr(config, "PROFILE_DIR", profile)
+    monkeypatch.setattr(config, "PROFILE_MARKER", profile / ".umlib-managed")
+    config.PROFILE_MARKER.touch()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: link))
+
+    out = auth.clear_session()
+    assert out["cleared"] is True, out["message"]
+    assert not profile.exists()
+
+
+def test_logout_clears_the_cached_login_result(tmp_path, monkeypatch):
+    """The no-profile early return skipped the reset, so auth_status kept
+    reporting a sign-in that logout had just said was gone."""
+    from umlib_mcp import auth
+
+    monkeypatch.setattr(config, "PROFILE_DIR", tmp_path / "absent")
+    auth._last_result = {"authenticated": True, "message": "login complete"}
+    out = auth.clear_session()
+    assert out["cleared"] is True
+    assert auth.last_login_result() is None
+    # and it names the path, since a profile may exist somewhere else
+    assert str(tmp_path / "absent") in out["message"]

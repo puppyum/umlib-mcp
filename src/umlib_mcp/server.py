@@ -192,12 +192,26 @@ async def resolve(query: str) -> dict:
                 "message": "could not reach the metadata service; try again in a moment",
             }
         if not meta:
+            # Crossref answered and has no such record, which is usually a typo
+            # but is also true of every DataCite DOI: arXiv, Zenodo, OSF,
+            # figshare, Dryad, Dataverse. Those are real papers and often
+            # openly available, so ask OpenAlex before giving up on the DOI.
+            oa_info = await oa.open_access(doi)
+            if not oa_info:
+                return {
+                    "status": "error",
+                    "code": "doi_not_found",
+                    "doi": doi,
+                    "mgetit_url": config.mgetit_url(doi),
+                    "message": f"no record of {doi}; check the DOI, or search by title instead",
+                }
             return {
-                "status": "error",
-                "code": "doi_not_found",
+                "status": "ok",
                 "doi": doi,
+                "open_access": oa_info,
                 "mgetit_url": config.mgetit_url(doi),
-                "message": f"no record of {doi}; check the DOI, or search by title instead",
+                "note": "not registered with Crossref, so there is no publisher metadata; "
+                "the open-access record is what is known about it",
             }
     else:
         candidates = await oa.crossref_search(query)

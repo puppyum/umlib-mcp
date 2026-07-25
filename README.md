@@ -68,9 +68,11 @@ PDFs save to `~/Downloads`. When a session expires you'll be asked to sign in ag
 
 ## Making it reach for the tools on its own
 
-Claude Code and Codex load the bundled skill, so they already try umlib when a paper looks out of reach. For other assistants, paste this into your project instructions (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`):
+Out of the box your assistant will use these tools when you ask it to. To have it reach for them on its own, paste this into your project instructions (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`):
 
 > When searching for or downloading scholarly articles, papers, books or other publications, use the umlib tools. If content looks inaccessible (paywalled, login-walled, 403, or abstract-only) try umlib's `fetch_pdf` before concluding it is unavailable, since it may be accessible through the authenticated library session. Fetch one paper at a time.
+
+If you installed through the plugin instead of the script, that same text ships as a skill and you can skip this step.
 
 ## One rule
 

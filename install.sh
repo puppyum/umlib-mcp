@@ -100,13 +100,17 @@ register_json() {
     return
   fi
 
-  # an unwritable or unreadable config must skip this agent, not kill the run
-  if [ -f "$file" ] && ! cp -p "$file" "$file.bak-$STAMP" 2>/dev/null; then
-    SKIPPED+=("$label (could not back up its config, left untouched)")
+  # an unwritable or unreadable config must skip this agent, not kill the run.
+  # redirections apply left to right, so 2>/dev/null has to come FIRST or bash
+  # prints its own "Permission denied" to the terminal before it takes effect
+  if ! { : >>"$file"; } 2>/dev/null; then
+    SKIPPED+=("$label (config not writable, left untouched)")
     return
   fi
-  if ! : >>"$file" 2>/dev/null; then
-    SKIPPED+=("$label (config not writable, left untouched)")
+  # back up only once we know we can actually write, so a config we leave
+  # alone does not collect a .bak on every run
+  if [ -s "$file" ] && ! cp -p "$file" "$file.bak-$STAMP" 2>/dev/null; then
+    SKIPPED+=("$label (could not back up its config, left untouched)")
     return
   fi
   # a broken config for one agent must not abort the whole install
@@ -132,6 +136,7 @@ PY
     # Zed and VS Code configs commonly carry // comments, which are not JSON.
     # Rewriting them would throw the comments away, so hand the entry back
     # for the user to paste instead.
+    rm -f "$file.bak-$STAMP"  # nothing was changed, so the backup is clutter
     SKIPPED+=("$label (could not update automatically, see below)")
     MANUAL+=("$label|$file|$key")
     return
@@ -207,6 +212,12 @@ register_json "Claude Desktop" "$APP_SUPPORT/Claude/claude_desktop_config.json" 
 head_ "Done"
 if [ ${#REGISTERED[@]} -gt 0 ]; then
   say "registered with: $(printf '%s, ' "${REGISTERED[@]}" | sed 's/, $//')"
+elif [ ${#SKIPPED[@]} -gt 0 ]; then
+  # agents were found, they just could not be written to; saying "no agents
+  # detected" directly above a list of them reads as a contradiction
+  say "installed, but nothing could be registered automatically. Add this"
+  say "command to your MCP client by hand:"
+  say "  $BIN"
 else
   say "no agents detected; add this command to any MCP client by hand:"
   say "  $BIN"
@@ -231,9 +242,10 @@ Two steps left:
 Sign in with your university account in the window that opens, then ask for a
 paper by DOI or title. Upgrade later with: uv tool upgrade umlib-mcp --reinstall
 
-Claude Code and Codex pick up the usage guidance from the bundled skill. For
-any other assistant, paste this into its project instructions (CLAUDE.md,
-AGENTS.md, .cursorrules) so it reaches for the tools on its own:
+One optional extra. Paste this into your assistant's project instructions
+(CLAUDE.md, AGENTS.md, .cursorrules) so it reaches for the tools by itself
+instead of waiting to be asked. Installing via the plugin instead of this
+script ships the same text as a skill, and then you can skip it:
 
     When searching for or downloading scholarly articles, papers, books or
     other publications, use the umlib tools. If content looks inaccessible -

@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import shutil
 import time
+from pathlib import Path
 
 from . import browser, config
 
@@ -203,19 +204,32 @@ async def clear_session_async() -> dict:
         browser._release_file_lock(fd)
 
 
+def _resolved_home() -> Path:
+    try:
+        return Path.home().resolve()
+    except (RuntimeError, OSError):
+        return Path.home()
+
+
 def clear_session() -> dict:
     if login_active() or browser.session_active():
         return {
             "cleared": False,
             "message": "a browser session is in use; finish or close it first",
         }
+    global _last_result
     p = config.PROFILE_DIR
     if not p.exists():
         # the normal state on a fresh install and after a successful logout;
         # the ownership guard below would call this a refusal, which reads
-        # like a safety problem rather than "there was nothing to do"
-        return {"cleared": True, "message": "no saved library session to clear"}
-    home = p.home()
+        # like a safety problem rather than "there was nothing to do". Name the
+        # path, because a profile may well exist somewhere this is not looking.
+        _last_result = None  # or status keeps reporting a login with no profile
+        return {"cleared": True, "message": f"no saved library session at {p}"}
+    # resolve() both sides: config.PROFILE_DIR is already resolved, so an
+    # unresolved home makes is_relative_to false for everyone whose home is a
+    # symlink, and logout then refuses forever
+    home = _resolved_home()
     # the marker alone is not enough: ensure_profile_dir() drops it wherever
     # UMLIB_PROFILE_DIR points, so a profile dir set to $HOME would otherwise
     # make this an rm -rf of the user's home
@@ -227,7 +241,6 @@ def clear_session() -> dict:
             "cleared": False,
             "message": f"refusing to delete {p}: not a profile directory this tool owns",
         }
-    global _last_result
     shutil.rmtree(p, ignore_errors=True)
     if p.exists():  # rmtree swallows errors, so confirm rather than assume
         return {
