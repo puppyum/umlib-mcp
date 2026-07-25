@@ -1048,3 +1048,56 @@ def test_download_failure_surfaces_the_reason(monkeypatch):
     with pytest.raises(RuntimeError, match="connection refused"):
         asyncio.run(browser.ensure_chromium(None))
     assert not browser._install_lock.locked()  # and the lock is not stranded
+
+
+def test_pdf_accepted_when_a_publisher_redirects_to_its_cdn():
+    """Silverchair (OUP and a long tail of society journals) authenticates via
+    the proxy and then hands the bytes off to a signed CDN URL on another host.
+    Requiring the redirect chain to END on the proxy reported no_pdf_found on a
+    PDF we had already been given."""
+    import asyncio
+
+    class Resp:
+        def __init__(self, url, body):
+            self.url, self.ok, self._b = url, True, body
+            self.headers = {"content-type": "application/pdf"}
+
+        async def body(self):
+            return self._b
+
+    class Req:
+        def __init__(self, url, body):
+            self._r = Resp(url, body)
+
+        async def get(self, url, **kw):
+            return self._r
+
+    class Ctx:
+        def __init__(self, url, body):
+            self.request = Req(url, body)
+
+    pdf = b"%PDF-1.7" + b"x" * 500
+    proxied = "https://academic-oup-com.proxy.lib.umich.edu/jcmc/article-pdf/1.pdf"
+
+    # ends on a public CDN off the proxy: accepted
+    cdn = Ctx("https://watermark02.silverchair.com/x.pdf?token=abc", pdf)
+    assert asyncio.run(fetch._pdf_from_request(cdn, proxied)) == pdf
+
+    # ends back on the proxy: still accepted
+    onprox = Ctx(proxied, pdf)
+    assert asyncio.run(fetch._pdf_from_request(onprox, proxied)) == pdf
+
+    # ends somewhere internal: still refused, so a hostile redirect cannot
+    # turn this into an SSRF
+    for internal in (
+        "http://127.0.0.1/secret.pdf",
+        "http://169.254.169.254/latest/meta-data",
+        "http://localhost:8080/x.pdf",
+    ):
+        assert asyncio.run(fetch._pdf_from_request(Ctx(internal, pdf), proxied)) is None
+
+    # and a non-PDF body is refused wherever it came from
+    assert (
+        asyncio.run(fetch._pdf_from_request(Ctx(proxied, b"<html>nope"), proxied))
+        is None
+    )

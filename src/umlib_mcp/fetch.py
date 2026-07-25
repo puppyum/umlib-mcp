@@ -250,10 +250,21 @@ async def download_open_access(url: str) -> bytes | None:
 
 async def _pdf_from_request(ctx, url: str) -> bytes | None:
     # EZproxy always bounces a /login?url= link at least once, so redirects
-    # have to be followed; what matters is that we refuse the body if the
-    # chain ended up somewhere off the proxy.
+    # have to be followed.
+    #
+    # The chain does not have to END on the proxy, though. Plenty of platforms
+    # hand the actual bytes off to a signed CDN URL on another host once the
+    # proxy has authenticated you: Silverchair does it for OUP and a long tail
+    # of society journals. Requiring a proxied final URL threw those away and
+    # reported no_pdf_found on a PDF we had already been given. What matters is
+    # that we STARTED from a proxied candidate, which prepare_candidates
+    # guarantees, and that the chain did not end somewhere internal.
     r = await ctx.request.get(url, timeout=60_000)
-    if not r.ok or not browser.is_proxied_url(r.url):
+    if not r.ok:
+        return None
+    if not browser.is_proxied_url(r.url) and not await asyncio.to_thread(
+        _is_public_host, r.url
+    ):
         return None
     if _oversized(r.headers.get("content-length")):
         return None
