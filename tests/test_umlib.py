@@ -51,7 +51,10 @@ def test_is_proxied_url():
 def test_prepare_candidates_relative_resolves_and_proxies():
     page = "https://dl-acm-org.proxy.lib.umich.edu/doi/10.1/a"
     out = fetch.prepare_candidates(["/doi/pdf/10.1/a"], page, "dl.acm.org")
-    assert out == ["https://dl-acm-org.proxy.lib.umich.edu/doi/pdf/10.1/a"]
+    assert out == [
+        "https://dl-acm-org.proxy.lib.umich.edu/doi/pdf/10.1/a",
+        "https://dl-acm-org.proxy.lib.umich.edu/doi/pdfdirect/10.1/a",
+    ]
 
 
 def test_prepare_candidates_remaps_bare_publisher_host():
@@ -60,7 +63,9 @@ def test_prepare_candidates_remaps_bare_publisher_host():
         ["https://dl.acm.org/doi/pdf/10.1/a"], page, "dl.acm.org"
     )
     assert out == [
-        "https://proxy.lib.umich.edu/login?url=https://dl.acm.org/doi/pdf/10.1/a"
+        "https://proxy.lib.umich.edu/login?url=https://dl.acm.org/doi/pdf/10.1/a",
+        # the Wiley reader-vs-file variant, tried after the link itself
+        "https://proxy.lib.umich.edu/login?url=https://dl.acm.org/doi/pdfdirect/10.1/a",
     ]
 
 
@@ -77,7 +82,10 @@ def test_prepare_candidates_drops_offproxy_and_junk():
 def test_prepare_candidates_keeps_epdf_rewrite():
     page = "https://x-org.proxy.lib.umich.edu/p"
     out = fetch.prepare_candidates(["/doi/epdf/10.1/a"], page, "x.org")
-    assert out == ["https://x-org.proxy.lib.umich.edu/doi/pdf/10.1/a"]
+    assert out == [
+        "https://x-org.proxy.lib.umich.edu/doi/pdf/10.1/a",
+        "https://x-org.proxy.lib.umich.edu/doi/pdfdirect/10.1/a",
+    ]
 
 
 def test_slugify_filename():
@@ -1101,3 +1109,23 @@ def test_pdf_accepted_when_a_publisher_redirects_to_its_cdn():
         asyncio.run(fetch._pdf_from_request(Ctx(proxied, b"<html>nope"), proxied))
         is None
     )
+
+
+def test_wiley_reader_link_also_yields_the_direct_file():
+    """Wiley serves an HTML reader at /doi/pdf/ and the file at /doi/pdfdirect/,
+    and the article page only links to the reader. Other Atypon sites do serve
+    the file at /doi/pdf/, so both are tried rather than one swapped for the
+    other."""
+    page = (
+        "https://asistdl-onlinelibrary-wiley-com.proxy.lib.umich.edu/doi/10.1002/asi.1"
+    )
+    out = fetch.prepare_candidates(
+        ["/doi/pdf/10.1002/asi.1"], page, "asistdl.onlinelibrary.wiley.com"
+    )
+    assert out == [
+        "https://asistdl-onlinelibrary-wiley-com.proxy.lib.umich.edu/doi/pdf/10.1002/asi.1",
+        "https://asistdl-onlinelibrary-wiley-com.proxy.lib.umich.edu/doi/pdfdirect/10.1002/asi.1",
+    ]
+    # the variant must not push the list past the cap a hostile page is held to
+    many = [f"/doi/pdf/10.1/{i}" for i in range(20)]
+    assert len(fetch.prepare_candidates(many, page, "x")) <= fetch.MAX_CANDIDATES

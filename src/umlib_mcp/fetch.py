@@ -126,6 +126,15 @@ def prepare_candidates(urls, page_url: str, publisher_host: str) -> list[str]:
             continue  # anywhere else: don't fetch it with our session cookies
         if candidate not in out:
             out.append(candidate)
+        # Wiley serves an HTML reader at /doi/pdf/ and the file itself at
+        # /doi/pdfdirect/, and the article page only ever links to the reader.
+        # Other Atypon sites do serve the file at /doi/pdf/, so add the variant
+        # rather than swapping it in: a candidate that comes back as HTML is
+        # skipped anyway, at the cost of one request.
+        if "/doi/pdf/" in candidate and len(out) < MAX_CANDIDATES:
+            direct = candidate.replace("/doi/pdf/", "/doi/pdfdirect/")
+            if direct not in out:
+                out.append(direct)
     return out
 
 
