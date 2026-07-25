@@ -16,13 +16,30 @@ from . import config
 
 _pw = None
 _lock = asyncio.Lock()
+_live_contexts = 0
 
 
 async def _playwright():
+    """The driver is a subprocess. If it dies, every later call fails forever
+    unless we notice and build a new one."""
     global _pw
+    if _pw is not None:
+        try:
+            _ = _pw.chromium  # cheap liveness probe
+        except Exception:
+            _pw = None
     if _pw is None:
         _pw = await async_playwright().start()
     return _pw
+
+
+async def _discard_playwright() -> None:
+    """Drop a driver that has stopped responding so the next call rebuilds it."""
+    global _pw
+    dead, _pw = _pw, None
+    if dead is not None:
+        with contextlib.suppress(Exception):
+            await dead.stop()
 
 
 _install_lock = threading.Lock()
@@ -39,6 +56,7 @@ def _install_chromium() -> None:
             text=True,
             check=False,
             timeout=900,
+            stdin=subprocess.DEVNULL,  # never share the JSON-RPC stdin
         )
     if proc.returncode != 0:
         raise RuntimeError(
@@ -70,9 +88,12 @@ async def _launch(headless: bool):
             str(config.PROFILE_DIR), **kwargs
         )
     except Exception as e:
-        if "Executable doesn't exist" not in str(e):
-            raise
-        await asyncio.to_thread(_install_chromium)
+        if "Executable doesn't exist" in str(e):
+            await asyncio.to_thread(_install_chromium)
+        else:
+            # a driver that has died stays dead; rebuild it and try once more
+            await _discard_playwright()
+            pw = await _playwright()
         return await pw.chromium.launch_persistent_context(
             str(config.PROFILE_DIR), **kwargs
         )
@@ -87,19 +108,32 @@ async def _restore_state(ctx) -> None:
             await ctx.add_cookies(cookies)
 
 
-async def _save_state(ctx) -> None:
-    with contextlib.suppress(Exception):
+async def _save_state(ctx) -> bool:
+    """Returns whether cookies were actually persisted, so callers do not tell
+    the user their session was saved when nothing was written."""
+    try:
         state = await ctx.storage_state()
-        if state.get("cookies"):
-            config.STATE_FILE.write_text(json.dumps(state))
-            os.chmod(config.STATE_FILE, 0o600)
+    except Exception:
+        return False
+    if not state.get("cookies"):
+        return False
+    try:
+        # create it private, rather than writing then chmod-ing
+        fd = os.open(config.STATE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(state, fh)
+    except OSError:
+        return False
+    return True
 
 
 _held_locks: set[int] = set()
 
 
 def _lock_path():
-    return config.PROFILE_DIR.parent / "umlib.lock"
+    # inside the profile dir (mode 700, ours) rather than its parent, which
+    # for a custom profile_dir could be shared or world-writable
+    return config.PROFILE_DIR / ".umlib.lock"
 
 
 def _acquire_file_lock(timeout: float | None = None):
@@ -136,6 +170,18 @@ def _release_file_lock(fd) -> None:
         os.close(fd)
 
 
+async def _teardown(ctx, fd) -> None:
+    """Save cookies, close the browser, then release the lock - in that order,
+    and always all three, so the profile is never handed on while in use."""
+    try:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(_save_state(ctx), timeout=30)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(ctx.close(), timeout=30)
+    finally:
+        _release_file_lock(fd)
+
+
 @asynccontextmanager
 async def session(headless: bool = True):
     # One browser operation at a time: the persistent profile cannot be shared
@@ -157,29 +203,37 @@ async def session(headless: bool = True):
                 )
             )
             raise
+        ctx = None
         try:
             ctx = await _launch(headless)
             await _restore_state(ctx)
         except BaseException:
+            # _restore_state can fail or be cancelled after the launch, which
+            # would otherwise leave a live browser on the profile we unlock
+            if ctx is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(asyncio.wait_for(ctx.close(), timeout=30))
             _release_file_lock(fd)
             raise
+        global _live_contexts
+        _live_contexts += 1
         try:
             yield ctx
         finally:
-            # the release needs its own finally: a client cancelling a tool
-            # call re-raises at the first await in here, and anything that
-            # escapes would strand the lock and wedge every umlib process
-            try:
-                await _save_state(ctx)
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(ctx.close(), timeout=30)
-            finally:
-                _release_file_lock(fd)
+            _live_contexts -= 1
+            # Teardown runs as one shielded task: a client cancelling a tool
+            # call re-raises at the first await here, and if that skipped
+            # ctx.close() we would unlock a profile with a live browser still
+            # on it. Shielding lets the task finish even when we are cancelled.
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(asyncio.create_task(_teardown(ctx, fd)))
 
 
 def session_active() -> bool:
-    """True while a browser context (headless fetch or headed login) is open."""
-    return _lock.locked()
+    """True only while a browser context is actually open. _lock.locked() is
+    also true for callers merely queued for it, which made logout refuse when
+    it was perfectly safe."""
+    return _live_contexts > 0
 
 
 def host_of(url: str) -> str:

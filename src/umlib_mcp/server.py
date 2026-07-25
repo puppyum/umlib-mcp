@@ -1,11 +1,25 @@
+import contextlib
 import re
 import threading
+from importlib.metadata import version
 
 from mcp.server.fastmcp import FastMCP
 
 from . import auth, browser, config, fetch, oa, ratelimit
 
 mcp = FastMCP("umlib")
+# FastMCP takes no version argument, but the low-level server it wraps does,
+# and that is what clients see in serverInfo
+with contextlib.suppress(Exception):
+    mcp._mcp_server.version = version("umlib-mcp")
+
+
+def _safe(text, limit: int = 300) -> str:
+    """Publisher pages and upstream errors are untrusted text. Keep them short
+    and strip control characters before echoing them back to the model."""
+    out = re.sub(r"[\x00-\x1f\x7f]", " ", str(text))
+    return out[:limit] + ("..." if len(out) > limit else "")
+
 
 _STOPWORDS = frozenset(
     [
@@ -98,8 +112,9 @@ async def auth_status(live_check: bool = True, wait_for_login: bool = True) -> d
             try:
                 info["authenticated"] = await auth.check_auth()
             except Exception as e:
-                info["authenticated"] = "unknown"
-                info["error"] = str(e)
+                info["authenticated"] = False
+                info["check_failed"] = True
+                info["error"] = _safe(e)
     return info
 
 
@@ -174,7 +189,7 @@ async def resolve(query: str) -> dict:
                 "status": "error",
                 "code": "no_matches",
                 "query": query,
-                "closest_title": meta.get("title"),
+                "closest_title": _safe(meta.get("title")),
                 "message": "nothing matched that closely; check the title or pass a DOI",
             }
     result = {"status": "ok", **meta}
@@ -223,7 +238,7 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
             }
 
     meta = {}
-    looks_like_url = "://" in doi_or_url
+    looks_like_url = config.is_web_url(doi_or_url)
     if looks_like_url and not config.is_web_url(doi_or_url):
         return {
             "status": "error",
@@ -267,6 +282,16 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
                     "url_used": oa_info["pdf_url"],
                 }
 
+    if not publisher_url and not meta:
+        # crossref gave us nothing at all: an unreachable service, not a DOI
+        # that genuinely lacks a publisher link
+        return {
+            "status": "error",
+            "code": "lookup_unavailable",
+            "doi": doi,
+            "message": "could not reach the metadata service, so there is no "
+            "publisher link to try; check your connection and retry",
+        }
     if not publisher_url:
         return {
             "status": "error",
@@ -286,7 +311,7 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
             "message": "no active library session; run the login tool, then retry",
         }
         if e.landed_url:
-            out["landed_on"] = e.landed_url
+            out["landed_on"] = _safe(e.landed_url)
         return out
     except ratelimit.RateLimited as e:
         return {
@@ -309,16 +334,23 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
             "status": "error",
             "code": "no_pdf_found",
             "manual_url": config.proxied(publisher_url),
-            "page_reached": e.page_url,
+            "page_reached": _safe(e.page_url),
             "mgetit_url": config.mgetit_url(doi) if doi else None,
             "message": "page loaded but no PDF link worked; open manual_url in a browser",
+        }
+    except TimeoutError as e:
+        return {
+            "status": "error",
+            "code": "profile_busy",
+            "message": "another agent is using the browser profile; try again shortly",
+            "detail": _safe(e),
         }
     except Exception as e:
         return {
             "status": "error",
             "code": "fetch_failed",
             "message": "the fetch failed unexpectedly; open manual_url in a browser",
-            "detail": str(e),
+            "detail": _safe(e),
             "manual_url": config.proxied(publisher_url),
         }
     try:

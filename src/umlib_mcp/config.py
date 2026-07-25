@@ -1,4 +1,5 @@
 import os
+import re
 import tomllib
 from pathlib import Path
 from urllib.parse import urlparse
@@ -78,7 +79,15 @@ RESOLVER_BASE = setting(
 )
 
 PROFILE_DIR = _path("profile_dir", "~/.umlib/profile")
-DOWNLOAD_DIR = _path("download_dir", "~/Downloads")
+
+
+def _default_download_dir() -> str:
+    """XDG_DOWNLOAD_DIR when the desktop defines it: on a non-English Linux
+    desktop ~/Downloads is not where the file manager looks."""
+    return os.environ.get("XDG_DOWNLOAD_DIR") or "~/Downloads"
+
+
+DOWNLOAD_DIR = _path("download_dir", _default_download_dir())
 
 # A file we drop inside a profile dir we created, so logout only ever deletes
 # a directory this tool owns (not, say, a user's real folder that happens to
@@ -93,7 +102,17 @@ STATE_FILE = PROFILE_DIR / "session-state.json"
 
 # Optional. Open-access lookups work without it (OpenAlex needs no contact
 # address); setting it adds Unpaywall as a second source, which requires one.
-EMAIL = setting("email", "")
+_EMAIL_RAW = setting("email", "")
+# it goes straight into a User-Agent header; a stray control character or
+# newline would break every metadata lookup and surface as "doi not found"
+EMAIL = (
+    _EMAIL_RAW.strip()
+    if re.fullmatch(
+        r"[^@\s()<>,;:\\\"]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", _EMAIL_RAW.strip()
+    )
+    else ""
+)
+EMAIL_INVALID = bool(_EMAIL_RAW.strip()) and not EMAIL
 
 # Licensed-fetch pacing. The library's appropriate-use statement bars
 # systematic downloading but sets no number, so these are our own courtesy

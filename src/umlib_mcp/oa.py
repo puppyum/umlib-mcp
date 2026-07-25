@@ -1,9 +1,15 @@
+import logging
 import re
 from urllib.parse import quote
 
 import httpx
 
 from . import config
+
+# httpx logs a line per request at INFO, which would put the user's searches
+# and DOIs into whatever log the agent keeps
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s\"'<>]+", re.IGNORECASE)
 
@@ -18,7 +24,9 @@ def extract_doi(text: str) -> str | None:
     # trim trailing punctuation, but keep closers that are balanced inside
     # the DOI itself (e.g. 10.1016/0167-2789(92)90242-F)
     prev = None
-    while doi != prev:
+    for _ in range(64):
+        if doi == prev:
+            break
         prev = doi
         doi = doi.rstrip(".,;")
         for opener, closer in (("(", ")"), ("[", "]"), ("{", "}")):

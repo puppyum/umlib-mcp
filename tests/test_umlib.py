@@ -205,6 +205,40 @@ def test_malformed_config_file_does_not_crash(tmp_path, monkeypatch):
     assert config._load_file() == {}
 
 
+def test_email_must_be_well_formed_before_reaching_a_header(monkeypatch):
+    import importlib
+
+    for raw, expect in [
+        ("you@umich.edu", "you@umich.edu"),
+        (" you@umich.edu ", "you@umich.edu"),
+        ("not an email", ""),  # would break every lookup via the User-Agent
+        ("you@umich.edu\nX-Injected: 1", ""),
+        ("", ""),
+    ]:
+        monkeypatch.setenv("UMLIB_EMAIL", raw)
+        reloaded = importlib.reload(config)
+        assert expect == reloaded.EMAIL, raw
+    monkeypatch.delenv("UMLIB_EMAIL", raising=False)
+    importlib.reload(config)
+
+
+def test_untrusted_text_is_clipped_and_stripped():
+    from umlib_mcp.server import _safe
+
+    assert _safe("a" * 5000).endswith("...")
+    assert len(_safe("a" * 5000)) <= 303
+    assert "\n" not in _safe("line1\nline2")
+    assert "\x00" not in _safe("nul\x00byte")
+
+
+def test_save_pdf_is_bounded_and_atomic(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DOWNLOAD_DIR", tmp_path)
+    # a very long name must still be writable rather than failing after the
+    # fetch has already been paid for
+    p = fetch.save_pdf(b"%PDF-1.7", "x" * 500 + ".pdf")
+    assert p.exists() and len(p.name) <= 130
+
+
 def test_hostile_page_cannot_amplify_candidate_requests():
     """The JS cap runs in the publisher's page, where Set and Array.slice are
     page-owned, so a hostile page can return a list of any length or type.
@@ -314,17 +348,31 @@ def test_shipped_defaults(monkeypatch):
     assert config.setting("min_fetch_interval_s", 5.0, float) == 5.0
 
 
-def test_ratelimit_refund_restores_a_slot(monkeypatch):
+def test_ratelimit_refunds_the_callers_own_slot(monkeypatch):
+    """Two fetches can be in flight, so refund must return the caller's slot
+    rather than whichever was taken most recently."""
+    import asyncio
+
     from umlib_mcp import ratelimit
 
-    monkeypatch.setattr(ratelimit, "_times", type(ratelimit._times)())
-    before = ratelimit.remaining_this_hour()
-    ratelimit._times.append(__import__("time").monotonic())
-    assert ratelimit.remaining_this_hour() == before - 1
-    ratelimit.refund()
-    assert ratelimit.remaining_this_hour() == before
-    ratelimit.refund()  # refunding an empty ledger must not go negative or raise
-    assert ratelimit.remaining_this_hour() == before
+    monkeypatch.setattr(ratelimit, "_slots", {})
+    monkeypatch.setattr(ratelimit, "_last_fetch", 0.0)
+    monkeypatch.setattr(config, "MIN_FETCH_INTERVAL_S", 0.0)
+
+    async def run():
+        before = ratelimit.remaining_this_hour()
+        a = await ratelimit.acquire()
+        b = await ratelimit.acquire()
+        assert ratelimit.remaining_this_hour() == before - 2
+        ratelimit.refund(a)  # the older slot, not the newest
+        assert ratelimit.remaining_this_hour() == before - 1
+        ratelimit.refund(a)  # refunding twice must not credit a second slot
+        assert ratelimit.remaining_this_hour() == before - 1
+        ratelimit.refund(b)
+        assert ratelimit.remaining_this_hour() == before
+        ratelimit.refund(None)  # a never-charged fetch is a no-op
+
+    asyncio.run(run())
 
 
 def test_parse_openalex():

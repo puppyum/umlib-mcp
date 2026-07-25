@@ -55,7 +55,25 @@ async def check_auth() -> bool:
         return browser.is_proxied_url(page.url)
 
 
+def _no_display() -> str:
+    """The sign-in needs a real window. On Linux (including WSL without a
+    display) that is worth saying before opening nothing at all."""
+    import os
+    import sys
+
+    if sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        return (
+            "no graphical display is available, so the sign-in window cannot open. "
+            "Run the server where you can see a browser, or set DISPLAY."
+        )
+    return ""
+
+
 async def _login_flow() -> dict:
+    if msg := _no_display():
+        return {"authenticated": False, "message": msg}
     async with browser.session(headless=False) as ctx:
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(config.proxied(config.CANARY_URL), timeout=60_000)
@@ -93,10 +111,16 @@ async def _run_login() -> None:
         _last_result = await asyncio.wait_for(
             _login_flow(), timeout=config.LOGIN_TIMEOUT_S + 600
         )
-    except TimeoutError:
+    except TimeoutError as e:
+        # a profile-lock timeout is a different problem with a different fix
+        busy = "using the browser profile" in str(e)
         _last_result = {
             "authenticated": False,
-            "message": "login did not finish in time; run login again",
+            "message": (
+                "another agent is using the browser profile; try login again shortly"
+                if busy
+                else "login did not finish in time; run login again"
+            ),
         }
     except Exception as e:
         _last_result = {"authenticated": False, "message": f"login failed: {e}"}
@@ -117,7 +141,8 @@ def start_login() -> dict:
     return {
         "started": True,
         "message": (
-            f"browser window opening. Complete {SIGN_IN} in it within about "
+            f"opening a browser window (it may wait a moment for any fetch already "
+            f"running). Complete {SIGN_IN} in it within about "
             f"{config.LOGIN_TIMEOUT_S // 60} minutes; it closes itself when done. "
             f"The next fetch waits for this automatically, so just go ahead and "
             f"ask for the paper."
@@ -128,13 +153,25 @@ def start_login() -> dict:
 async def clear_session_async() -> dict:
     """Take the same cross-process lock a fetch would, so the profile is never
     deleted out from under another agent's running browser."""
+    acquiring = asyncio.create_task(asyncio.to_thread(browser._acquire_file_lock, 10.0))
     try:
-        fd = await asyncio.to_thread(browser._acquire_file_lock, 10.0)
+        fd = await asyncio.shield(acquiring)
     except TimeoutError:
         return {
             "cleared": False,
             "message": "another agent is using the browser profile; try again in a moment",
         }
+    except BaseException:
+        # cancelled while the worker was still blocking on flock: release
+        # whatever it eventually takes, or the lock is stranded for good
+        acquiring.add_done_callback(
+            lambda t: (
+                browser._release_file_lock(t.result())
+                if not t.cancelled() and t.exception() is None
+                else None
+            )
+        )
+        raise
     try:
         return clear_session()
     finally:

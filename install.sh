@@ -132,7 +132,7 @@ PY
     # Zed and VS Code configs commonly carry // comments, which are not JSON.
     # Rewriting them would throw the comments away, so hand the entry back
     # for the user to paste instead.
-    SKIPPED+=("$label (see the entry to paste below)")
+    SKIPPED+=("$label (could not update automatically, see below)")
     MANUAL+=("$label|$file|$key")
     return
   fi
@@ -199,7 +199,7 @@ esac
 
 register_json "Cursor"         "$HOME/.cursor/mcp.json"                          "mcpServers"      0
 register_json "Windsurf"       "$HOME/.codeium/windsurf/mcp_config.json"         "mcpServers"      0
-register_json "Zed"            "$HOME/.config/zed/settings.json"                 "context_servers" 0
+register_json "Zed"            "${XDG_CONFIG_HOME:-$HOME/.config}/zed/settings.json" "context_servers" 0
 register_json "VS Code"        "$APP_SUPPORT/Code/User/mcp.json"                 "servers"         1
 register_json "Claude Desktop" "$APP_SUPPORT/Claude/claude_desktop_config.json"  "mcpServers"      0
 
@@ -217,7 +217,7 @@ fi
 # snippet printed rather than rewritten, so nothing of the user's is lost
 for entry in ${MANUAL+"${MANUAL[@]}"}; do
   label="${entry%%|*}"; rest="${entry#*|}"; file="${rest%%|*}"; key="${rest##*|}"
-  printf '\n  %s keeps comments in its config, so add this to %s by hand:\n' "$label" "$file"
+  printf '\n  %s could not be updated automatically (its config is usually JSON with\n  comments, which we will not rewrite). Add this to %s by hand:\n' "$label" "$file"
   printf '    "%s": { "umlib": { "command": "%s" } }\n' "$key" "$BIN"
 done
 

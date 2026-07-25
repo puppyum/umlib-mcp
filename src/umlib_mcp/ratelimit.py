@@ -1,6 +1,6 @@
 import asyncio
+import itertools
 import time
-from collections import deque
 
 from . import config
 
@@ -14,37 +14,56 @@ class RateLimited(Exception):
         )
 
 
-_times: deque[float] = deque()
+# Wall clock, not monotonic: on macOS the monotonic clock stops while the
+# machine is asleep, so a capped user would still be capped after a night's
+# sleep. Entries are (token, timestamp); the token lets a caller give back
+# its own slot rather than whichever was added last.
+_slots: dict[int, float] = {}
+_next_token = itertools.count(1)
 _last_fetch = 0.0
 _lock = asyncio.Lock()
 
 
-async def acquire() -> None:
+def _cap() -> int:
+    return max(1, config.MAX_FETCHES_PER_HOUR)
+
+
+def _expire(now: float) -> None:
+    for token, at in list(_slots.items()):
+        # a clock jumped backwards is treated as "expired" rather than
+        # trapping the user behind a window that can never close
+        if now - at > 3600 or at > now:
+            del _slots[token]
+
+
+async def acquire() -> int:
+    """Charge one slot and return its token. Pass the token to refund() if the
+    attempt turns out never to have reached licensed content."""
     global _last_fetch
     async with _lock:  # concurrent calls must not both pass the cap check
-        now = time.monotonic()
-        while _times and now - _times[0] > 3600:
-            _times.popleft()
-        if len(_times) >= max(1, config.MAX_FETCHES_PER_HOUR):
-            oldest = _times[0] if _times else now
+        now = time.time()
+        _expire(now)
+        if len(_slots) >= _cap():
+            oldest = min(_slots.values())
             raise RateLimited(3600 - (now - oldest))
-        gap = config.MIN_FETCH_INTERVAL_S - (now - _last_fetch)
+        gap = config.MIN_FETCH_INTERVAL_S - (time.monotonic() - _last_fetch)
         if gap > 0:
             await asyncio.sleep(gap)
         _last_fetch = time.monotonic()
-        _times.append(_last_fetch)
+        token = next(_next_token)
+        _slots[token] = time.time()
+        return token
 
 
-def refund() -> None:
-    """Hand back the most recent slot. Used when a fetch was charged up front
-    but never actually reached licensed content (no session, or the publisher
-    isn't proxied at all), so a signed-out user can't burn their quota."""
-    if _times:
-        _times.pop()
+def refund(token: int | None) -> None:
+    """Hand back one specific slot. Used when a fetch was charged up front but
+    never reached licensed content (no session, or the host isn't proxied), so
+    a signed-out user cannot burn their quota. Refunding twice is a no-op, and
+    a concurrent fetch's slot is never taken by mistake."""
+    if token is not None:
+        _slots.pop(token, None)
 
 
 def remaining_this_hour() -> int:
-    now = time.monotonic()
-    while _times and now - _times[0] > 3600:
-        _times.popleft()
-    return max(0, config.MAX_FETCHES_PER_HOUR - len(_times))
+    _expire(time.time())
+    return max(0, config.MAX_FETCHES_PER_HOUR - len(_slots))

@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import ipaddress
+import os
 import re
 import socket
 from pathlib import Path
@@ -26,7 +27,7 @@ class HostNotProxied(Exception):
 # Collect PDF candidates from a rendered publisher page. citation_pdf_url
 # covers most publishers; the selectors cover the stragglers (ScienceDirect
 # pdfft, Wiley/T&F/SAGE/ACM doi/pdf, Springer content/pdf).
-PDF_CANDIDATE_JS = """() => {
+PDF_CANDIDATE_JS = r"""() => {
   const out = [];
   const push = (u) => { if (u && typeof u === 'string') out.push(u); };
   const meta = document.querySelector('meta[name="citation_pdf_url"]');
@@ -37,9 +38,21 @@ PDF_CANDIDATE_JS = """() => {
     'a[href*="/doi/pdf"]',
     'a[href*="/doi/epdf"]',
     'a[href*="/content/pdf/"]',
-    'a[href$=".pdf"]',
+    'a[href*=".pdf"]',
+    'a[href*="/stamp/stamp.jsp"]',
+    'a[href*="/pdfdirect"]',
+    'a[href*="downloadpdf"]',
   ];
   for (const s of sels) document.querySelectorAll(s).forEach((a) => push(a.href));
+  // some publishers only expose the PDF inside a viewer frame
+  document.querySelectorAll('iframe[src], embed[src], object[data]').forEach((el) => {
+    try {
+      const u = el.getAttribute('src') || el.getAttribute('data') || '';
+      // a malformed src makes new URL throw, and an exception here would
+      // lose every candidate we already collected
+      if (/\.pdf|pdfdirect|stamp\.jsp|\/doi\/pdf/i.test(u)) push(new URL(u, location.href).href);
+    } catch (e) { /* skip this element */ }
+  });
   return [...new Set(out)].slice(0, 8);
 }"""
 
@@ -122,13 +135,20 @@ def save_pdf(data: bytes, filename: str) -> Path:
         base = "article"
     base = re.sub(r"\.pdf$", "", base, flags=re.IGNORECASE)
     base = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-.") or "article"
+    base = base[:120]  # leave room for the suffix on filename-length limits
     path = config.DOWNLOAD_DIR / f"{base}.pdf"
-    n = 1
-    while path.exists():
-        n += 1
-        path = config.DOWNLOAD_DIR / f"{base}-{n}.pdf"
-    path.write_bytes(data)
-    return path
+    # O_EXCL so two server processes racing on the same name cannot clobber
+    # each other, with a bounded search rather than an open-ended loop
+    for n in range(1, 200):
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            path = config.DOWNLOAD_DIR / f"{base}-{n + 1}.pdf"
+            continue
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return path
+    raise OSError(f"could not find a free filename for {base}.pdf")
 
 
 def _oversized(content_length: str | None) -> bool:
@@ -228,9 +248,9 @@ async def fetch_licensed(publisher_url: str) -> tuple[bytes, str]:
     """
     proxied_url = config.proxied(publisher_url)
     publisher_host = browser.host_of(publisher_url)
-    await ratelimit.acquire()
+    token = await ratelimit.acquire()
     try:
-        return await _fetch_via_proxy(proxied_url, publisher_host)
+        return await _fetch_via_proxy(proxied_url, publisher_host, token)
     except (NeedsLogin, HostNotProxied):
         raise  # already refunded at the point of detection
     except NoPdfFound:
@@ -238,11 +258,11 @@ async def fetch_licensed(publisher_url: str) -> tuple[bytes, str]:
         # this consumed a licensed fetch whether or not a PDF came back
         raise
     except BaseException:
-        ratelimit.refund()  # browser never got us to licensed content
+        ratelimit.refund(token)  # browser never got us to licensed content
         raise
 
 
-async def _fetch_via_proxy(proxied_url: str, publisher_host: str):
+async def _fetch_via_proxy(proxied_url: str, publisher_host: str, token: int):
     async with browser.session(headless=True) as ctx:
         page = await ctx.new_page()
         downloads = []
@@ -278,7 +298,7 @@ async def _fetch_via_proxy(proxied_url: str, publisher_host: str):
             raise NoPdfFound(proxied_url)
 
         if not browser.is_proxied_url(page.url):
-            ratelimit.refund()  # never got past the proxy: not a licensed fetch
+            ratelimit.refund(token)  # never past the proxy: not a licensed fetch
             if browser.host_of(page.url) == publisher_host:
                 # bounced straight back to the publisher: not in the proxy's
                 # database. (A redirector like doi.org is the ambiguous case:
@@ -302,9 +322,18 @@ async def _fetch_via_proxy(proxied_url: str, publisher_host: str):
 
 
 async def _read_download(download) -> bytes:
-    with contextlib.suppress(Exception):
-        path = await download.path()
-        if path:
-            data = Path(path).read_bytes()
-            return data if len(data) <= config.MAX_PDF_BYTES else b""
-    return b""
+    """Bounded: download.path() waits for the transfer to finish, and we hold
+    both profile locks while it does, so it cannot be allowed to hang."""
+    try:
+        path = await asyncio.wait_for(download.path(), timeout=120)
+    except (TimeoutError, Exception):
+        return b""
+    if not path:
+        return b""
+    try:
+        p = Path(path)
+        if p.stat().st_size > config.MAX_PDF_BYTES:  # check before reading it in
+            return b""
+        return p.read_bytes()
+    except OSError:
+        return b""

@@ -92,8 +92,11 @@ email = "you@umich.edu"     # adds Unpaywall alongside OpenAlex
 | `download_dir` | `~/Downloads` | Where PDFs save |
 | `profile_dir` | `~/.umlib/profile` | Where the session is stored |
 | `proxy_base` | `https://proxy.lib.umich.edu/login?url=` | EZproxy prefix |
+| `canary_url` | `https://www.jstor.org/` | The site used to tell "signed in" from "signed out". Point it at something your library definitely licenses |
+| `resolver_base` | U-M's MGet It | Link resolver for the "how do I get this" link; leave empty to omit it |
+| `rewrite_host` | derived from `proxy_base` | Only needed if your proxy signs in on one domain and rewrites onto another |
 
-Set `proxy_base` and it works at any other EZproxy school. Every setting also reads from an environment variable (`UMLIB_MAX_FETCHES_PER_HOUR` and so on), which wins over the file; the file exists because environment variables are awkward to apply across agents. `auth_status` reports the limit in force and which file it read.
+It works at other EZproxy schools, but check three settings before trusting it: `proxy_base`, `canary_url` (the default is JSTOR, and a school that does not license JSTOR can never look signed in), and `resolver_base` (the default points at U-M's resolver). OCLC-hosted proxies are detected automatically. Every setting also reads from an environment variable (`UMLIB_MAX_FETCHES_PER_HOUR` and so on), which wins over the file; the file exists because environment variables are awkward to apply across agents. `auth_status` reports the limit in force and which file it read.
 
 ## Develop
 
