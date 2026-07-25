@@ -1,6 +1,6 @@
 [project]
 name = "umlib-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server that fetches licensed library PDFs through your own university EZproxy session (University of Michigan defaults)"
 readme = "README.md"
 requires-python = ">=3.11"

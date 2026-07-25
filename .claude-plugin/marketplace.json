@@ -7,7 +7,7 @@
       "name": "umlib",
       "source": "./plugins/umlib",
       "description": "Fetch article PDFs via your own U-M library session (EZproxy)",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   ]
 }

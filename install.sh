@@ -142,7 +142,7 @@ PY
 
 head_ "Registering with your agents"
 
-# Claude Code — its own CLI keeps the config in the right scope
+# Claude Code: its own CLI keeps the config in the right scope
 if command -v claude >/dev/null 2>&1; then
   if [ "$DRY_RUN" = 1 ]; then
     say "would run: claude mcp add $NAME -s user -- $BIN"
@@ -159,7 +159,7 @@ else
   SKIPPED+=("Claude Code (not installed)")
 fi
 
-# Codex — `codex mcp add` needs a bare -- before the command, and overwrites cleanly
+# Codex: `codex mcp add` needs a bare -- before the command, and overwrites cleanly
 if command -v codex >/dev/null 2>&1; then
   if [ "$DRY_RUN" = 1 ]; then
     say "would run: codex mcp add $NAME -- $BIN"
@@ -175,7 +175,7 @@ else
   SKIPPED+=("Codex (not installed)")
 fi
 
-# Gemini CLI — prefer its CLI, fall back to settings.json
+# Gemini CLI: prefer its CLI, fall back to settings.json
 if command -v gemini >/dev/null 2>&1; then
   if [ "$DRY_RUN" = 1 ]; then
     say "would run: gemini mcp add -s user $NAME $BIN"
@@ -223,17 +223,17 @@ done
 
 cat <<EOF
 
-Restart your agent, then ask it:
+Two steps left:
 
-    log me into the library proxy
+  1. Restart your assistant.
+  2. Ask it: log me into the library proxy
 
 Sign in with your university account in the window that opens, then ask for a
-paper by DOI or title. Upgrade later with:  uv tool upgrade umlib-mcp --reinstall
+paper by DOI or title. Upgrade later with: uv tool upgrade umlib-mcp --reinstall
 
-Paste this into your project instructions (CLAUDE.md, AGENTS.md, .cursorrules,
-or the equivalent) so your agent reaches for the tools on its own. Installing
-via the plugin instead (/plugin install umlib@umlib-lab in Claude Code or
-Codex) bundles the same guidance as a skill, and then you can skip this:
+Claude Code and Codex pick up the usage guidance from the bundled skill. For
+any other assistant, paste this into its project instructions (CLAUDE.md,
+AGENTS.md, .cursorrules) so it reaches for the tools on its own:
 
     When searching for or downloading scholarly articles, papers, books or
     other publications, use the umlib tools. If content looks inaccessible -

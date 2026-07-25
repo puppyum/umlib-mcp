@@ -242,7 +242,21 @@ LOCK_TIMEOUT_S = setting("lock_timeout_s", LOGIN_TIMEOUT_S + 60, float)
 LOGIN_WAIT_S = setting("login_wait_s", 150.0, float)
 CANARY_URL = setting("canary_url", "https://www.jstor.org/")
 
-USER_AGENT = f"umlib-mcp/0.1 (mailto:{EMAIL})" if EMAIL else "umlib-mcp/0.1"
+
+def _version() -> str:
+    # read from package metadata rather than repeating the number here, where
+    # it would quietly drift away from pyproject.toml
+    try:
+        from importlib.metadata import version
+
+        return version("umlib-mcp")
+    except Exception:
+        return "0"
+
+
+USER_AGENT = (
+    f"umlib-mcp/{_version()} (mailto:{EMAIL})" if EMAIL else f"umlib-mcp/{_version()}"
+)
 
 # Everything above has now been read, so this is the complete picture. Empty
 # when the configuration is fine.
