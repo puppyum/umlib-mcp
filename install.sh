@@ -119,11 +119,15 @@ head_ "Registering with your agents"
 if command -v claude >/dev/null 2>&1; then
   if [ "$DRY_RUN" = 1 ]; then
     say "would run: claude mcp add $NAME -s user -- $BIN"
+    REGISTERED+=("Claude Code")
   else
     claude mcp remove "$NAME" -s user >/dev/null 2>&1 || true
-    claude mcp add "$NAME" -s user -- "$BIN" >/dev/null && say "registered with Claude Code"
+    if claude mcp add "$NAME" -s user -- "$BIN" >/dev/null 2>&1; then
+      say "registered with Claude Code"; REGISTERED+=("Claude Code")
+    else
+      SKIPPED+=("Claude Code (registration failed)")
+    fi
   fi
-  REGISTERED+=("Claude Code")
 else
   SKIPPED+=("Claude Code (not installed)")
 fi
@@ -132,10 +136,14 @@ fi
 if command -v codex >/dev/null 2>&1; then
   if [ "$DRY_RUN" = 1 ]; then
     say "would run: codex mcp add $NAME -- $BIN"
+    REGISTERED+=("Codex")
   else
-    codex mcp add "$NAME" -- "$BIN" >/dev/null && say "registered with Codex"
+    if codex mcp add "$NAME" -- "$BIN" >/dev/null 2>&1; then
+      say "registered with Codex"; REGISTERED+=("Codex")
+    else
+      SKIPPED+=("Codex (registration failed)")
+    fi
   fi
-  REGISTERED+=("Codex")
 else
   SKIPPED+=("Codex (not installed)")
 fi
@@ -154,11 +162,17 @@ else
   SKIPPED+=("Gemini CLI (not installed)")
 fi
 
-register_json "Cursor"         "$HOME/.cursor/mcp.json"                                  "mcpServers"      0
-register_json "Windsurf"       "$HOME/.codeium/windsurf/mcp_config.json"                 "mcpServers"      0
-register_json "Zed"            "$HOME/.config/zed/settings.json"                         "context_servers" 0
-register_json "VS Code"        "$HOME/Library/Application Support/Code/User/mcp.json"    "servers"         1
-register_json "Claude Desktop" "$HOME/Library/Application Support/Claude/claude_desktop_config.json" "mcpServers" 0
+# VS Code and Claude Desktop keep their config in different places per OS
+case "$(uname -s)" in
+  Darwin) APP_SUPPORT="$HOME/Library/Application Support" ;;
+  *)      APP_SUPPORT="${XDG_CONFIG_HOME:-$HOME/.config}" ;;
+esac
+
+register_json "Cursor"         "$HOME/.cursor/mcp.json"                          "mcpServers"      0
+register_json "Windsurf"       "$HOME/.codeium/windsurf/mcp_config.json"         "mcpServers"      0
+register_json "Zed"            "$HOME/.config/zed/settings.json"                 "context_servers" 0
+register_json "VS Code"        "$APP_SUPPORT/Code/User/mcp.json"                 "servers"         1
+register_json "Claude Desktop" "$APP_SUPPORT/Claude/claude_desktop_config.json"  "mcpServers"      0
 
 # ------------------------------------------------------------------------ report
 head_ "Done"

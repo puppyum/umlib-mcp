@@ -79,33 +79,46 @@ def _message(r: httpx.Response) -> dict | None:
 
 
 async def crossref_work(doi: str) -> dict | None:
-    async with _client() as c:
-        r = await c.get(f"https://api.crossref.org/works/{quote(doi, safe='')}")
-        msg = _message(r)
-        return parse_crossref(msg) if msg else None
+    try:
+        async with _client() as c:
+            r = await c.get(f"https://api.crossref.org/works/{quote(doi, safe='')}")
+    except httpx.HTTPError:
+        return None
+    msg = _message(r)
+    return parse_crossref(msg) if msg else None
 
 
-async def crossref_search(query: str, rows: int = 5) -> list[dict]:
-    async with _client() as c:
-        r = await c.get(
-            "https://api.crossref.org/works",
-            params={"query.bibliographic": query, "rows": rows},
-        )
-        msg = _message(r)
-        items = msg.get("items", []) if msg else []
-        return [parse_crossref(m) | {"score": m.get("score")} for m in items]
+async def crossref_search(query: str, rows: int = 5) -> list[dict] | None:
+    """Returns [] for a genuine no-match, None if the lookup service could not
+    be reached - the caller should not report those the same way."""
+    try:
+        async with _client() as c:
+            r = await c.get(
+                "https://api.crossref.org/works",
+                params={"query.bibliographic": query, "rows": rows},
+            )
+    except httpx.HTTPError:
+        return None
+    msg = _message(r)
+    if msg is None:
+        return None
+    items = msg.get("items", [])
+    return [parse_crossref(m) | {"score": m.get("score")} for m in items]
 
 
 async def openalex(doi: str) -> dict | None:
     """Open-access lookup that needs no API key and no contact address."""
-    async with _client() as c:
-        r = await c.get(f"https://api.openalex.org/works/doi:{quote(doi, safe='')}")
-        if r.status_code != 200:
-            return None
-        try:
-            return parse_openalex(r.json())
-        except (ValueError, AttributeError):
-            return None
+    try:
+        async with _client() as c:
+            r = await c.get(f"https://api.openalex.org/works/doi:{quote(doi, safe='')}")
+    except httpx.HTTPError:
+        return None
+    if r.status_code != 200:
+        return None
+    try:
+        return parse_openalex(r.json())
+    except (ValueError, AttributeError):
+        return None
 
 
 async def open_access(doi: str) -> dict | None:
@@ -126,14 +139,17 @@ async def unpaywall(doi: str) -> dict | None:
     """Secondary source. Returns None unless a contact email is configured."""
     if not config.EMAIL:
         return None
-    async with _client() as c:
-        r = await c.get(
-            f"https://api.unpaywall.org/v2/{quote(doi, safe='')}",
-            params={"email": config.EMAIL},
-        )
-        if r.status_code != 200:
-            return None
-        try:
-            return parse_unpaywall(r.json())
-        except (ValueError, AttributeError):
-            return None
+    try:
+        async with _client() as c:
+            r = await c.get(
+                f"https://api.unpaywall.org/v2/{quote(doi, safe='')}",
+                params={"email": config.EMAIL},
+            )
+    except httpx.HTTPError:
+        return None
+    if r.status_code != 200:
+        return None
+    try:
+        return parse_unpaywall(r.json())
+    except (ValueError, AttributeError):
+        return None

@@ -85,7 +85,17 @@ async def _login_flow() -> dict:
 async def _run_login() -> None:
     global _last_result
     try:
-        _last_result = await _login_flow()
+        # hard ceiling on the whole attempt: the in-flow deadline only starts
+        # once the browser is up, and a first-run browser download or a stuck
+        # profile lock could otherwise leave login_active() true forever
+        _last_result = await asyncio.wait_for(
+            _login_flow(), timeout=config.LOGIN_TIMEOUT_S + 600
+        )
+    except TimeoutError:
+        _last_result = {
+            "authenticated": False,
+            "message": "login did not finish in time; run login again",
+        }
     except Exception as e:
         _last_result = {"authenticated": False, "message": f"login failed: {e}"}
 
@@ -125,5 +135,12 @@ def clear_session() -> dict:
             "cleared": False,
             "message": f"refusing to delete {p}: not a profile this tool created",
         }
+    global _last_result
     shutil.rmtree(p, ignore_errors=True)
+    if p.exists():  # rmtree swallows errors, so confirm rather than assume
+        return {
+            "cleared": False,
+            "message": f"could not fully remove {p}; delete it by hand to clear the session",
+        }
+    _last_result = None  # otherwise status keeps reporting the old login
     return {"cleared": True, "message": f"library session cleared from {p}"}

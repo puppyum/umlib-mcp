@@ -122,6 +122,19 @@ def test_oversized_helper(monkeypatch):
     assert not fetch._oversized("not-a-number")
 
 
+def test_ratelimit_refund_restores_a_slot(monkeypatch):
+    from umlib_mcp import ratelimit
+
+    monkeypatch.setattr(ratelimit, "_times", type(ratelimit._times)())
+    before = ratelimit.remaining_this_hour()
+    ratelimit._times.append(__import__("time").monotonic())
+    assert ratelimit.remaining_this_hour() == before - 1
+    ratelimit.refund()
+    assert ratelimit.remaining_this_hour() == before
+    ratelimit.refund()  # refunding an empty ledger must not go negative or raise
+    assert ratelimit.remaining_this_hour() == before
+
+
 def test_parse_openalex():
     j = {
         "open_access": {"is_oa": True, "oa_status": "diamond"},

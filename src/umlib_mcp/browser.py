@@ -1,10 +1,12 @@
 import asyncio
 import contextlib
+import fcntl
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
@@ -93,13 +95,50 @@ async def _save_state(ctx) -> None:
             os.chmod(config.STATE_FILE, 0o600)
 
 
+def _lock_path():
+    return config.PROFILE_DIR.parent / "umlib.lock"
+
+
+def _acquire_file_lock(timeout: float = 120.0):
+    """Chromium cannot share one profile between processes, and several agents
+    may each be running their own copy of this server. A lock file makes them
+    take turns instead of corrupting the profile."""
+    _lock_path().parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() > deadline:
+                os.close(fd)
+                raise TimeoutError(
+                    "another umlib server is using the browser profile; try again shortly"
+                ) from None
+            time.sleep(0.5)
+
+
+def _release_file_lock(fd) -> None:
+    with contextlib.suppress(Exception):
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    with contextlib.suppress(Exception):
+        os.close(fd)
+
+
 @asynccontextmanager
 async def session(headless: bool = True):
-    # One browser operation at a time: the persistent profile cannot be
-    # shared by concurrent contexts, and single-flight is the polite mode.
+    # One browser operation at a time: the persistent profile cannot be shared
+    # by concurrent contexts. _lock serializes within this process; the lock
+    # file serializes across the other agents' server processes.
     async with _lock:
-        ctx = await _launch(headless)
-        await _restore_state(ctx)
+        fd = await asyncio.to_thread(_acquire_file_lock)
+        try:
+            ctx = await _launch(headless)
+            await _restore_state(ctx)
+        except BaseException:
+            _release_file_lock(fd)
+            raise
         try:
             yield ctx
         finally:
@@ -109,6 +148,7 @@ async def session(headless: bool = True):
             await _save_state(ctx)
             with contextlib.suppress(Exception):
                 await ctx.close()
+            _release_file_lock(fd)
 
 
 def session_active() -> bool:

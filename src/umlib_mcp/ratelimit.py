@@ -34,6 +34,14 @@ async def acquire() -> None:
         _times.append(_last_fetch)
 
 
+def refund() -> None:
+    """Hand back the most recent slot. Used when a fetch was charged up front
+    but never actually reached licensed content (no session, or the publisher
+    isn't proxied at all), so a signed-out user can't burn their quota."""
+    if _times:
+        _times.pop()
+
+
 def remaining_this_hour() -> int:
     now = time.monotonic()
     while _times and now - _times[0] > 3600:

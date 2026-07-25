@@ -133,10 +133,13 @@ async def download_open_access(url: str) -> bytes | None:
 
 
 async def _pdf_from_request(ctx, url: str) -> bytes | None:
-    # max_redirects=0: a redirect off the proxied host would leak the session
-    # cookie or chase an attacker-controlled hop
-    r = await ctx.request.get(url, timeout=60_000, max_redirects=0)
-    if not r.ok or _oversized(r.headers.get("content-length")):
+    # EZproxy always bounces a /login?url= link at least once, so redirects
+    # have to be followed; what matters is that we refuse the body if the
+    # chain ended up somewhere off the proxy.
+    r = await ctx.request.get(url, timeout=60_000)
+    if not r.ok or not browser.is_proxied_url(r.url):
+        return None
+    if _oversized(r.headers.get("content-length")):
         return None
     body = await r.body()
     if len(body) > config.MAX_PDF_BYTES or not body.startswith(b"%PDF"):
@@ -147,11 +150,13 @@ async def _pdf_from_request(ctx, url: str) -> bytes | None:
 async def fetch_licensed(publisher_url: str) -> tuple[bytes, str]:
     """Fetch one PDF through the user's authenticated EZproxy session.
 
-    The rate cap is charged only once we confirm a live session and reach the
-    publisher, so a needs-login or not-proxied outcome never burns the budget.
+    The cap is charged before we touch the proxy, so a capped user generates no
+    publisher traffic at all, and refunded when the attempt never reached
+    licensed content (no session, or the host isn't proxied).
     """
     proxied_url = config.proxied(publisher_url)
     publisher_host = browser.host_of(publisher_url)
+    await ratelimit.acquire()
     async with browser.session(headless=True) as ctx:
         page = await ctx.new_page()
         downloads = []
@@ -162,9 +167,9 @@ async def fetch_licensed(publisher_url: str) -> tuple[bytes, str]:
             # a direct-PDF URL makes the browser start a download instead of
             # rendering; that only happens once we're through the proxy
             if "Download is starting" not in str(e) and "ERR_ABORTED" not in str(e):
+                ratelimit.refund()
                 raise
         if downloads:
-            await ratelimit.acquire()
             data = await _read_download(downloads[0])
             if data.startswith(b"%PDF"):
                 return data, downloads[0].url
@@ -175,12 +180,11 @@ async def fetch_licensed(publisher_url: str) -> tuple[bytes, str]:
             await page.wait_for_load_state("networkidle", timeout=10_000)
 
         if not browser.is_proxied_url(page.url):
+            ratelimit.refund()  # never got past the proxy: not a licensed fetch
             if browser.host_of(page.url) == publisher_host:
                 raise HostNotProxied(page.url)
             raise NeedsLogin()
 
-        # live session, on a proxied publisher page: this is a licensed fetch
-        await ratelimit.acquire()
         candidates = prepare_candidates(
             await page.evaluate(PDF_CANDIDATE_JS), page.url, publisher_host
         )

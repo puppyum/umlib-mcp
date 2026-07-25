@@ -87,6 +87,12 @@ async def resolve(query: str) -> dict:
             return {"status": "error", "code": "doi_not_found", "doi": doi}
     else:
         candidates = await oa.crossref_search(query)
+        if candidates is None:
+            return {
+                "status": "error",
+                "code": "lookup_unavailable",
+                "message": "could not reach the metadata service; try again in a moment",
+            }
         if not candidates:
             return {"status": "error", "code": "no_matches", "query": query}
         meta = candidates[0]
