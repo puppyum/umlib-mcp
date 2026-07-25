@@ -20,9 +20,7 @@ async def auth_status(live_check: bool = True, wait_for_login: bool = True) -> d
         "proxy_base": config.PROXY_BASE,
         "profile_dir": str(config.PROFILE_DIR),
         "download_dir": str(config.DOWNLOAD_DIR),
-        "open_access_check": "enabled"
-        if config.EMAIL
-        else "disabled (set UMLIB_EMAIL)",
+        "open_access_check": "openalex" + (" + unpaywall" if config.EMAIL else ""),
         "licensed_fetches_remaining_this_hour": ratelimit.remaining_this_hour(),
     }
     if auth.login_active():
@@ -91,7 +89,7 @@ async def resolve(query: str) -> dict:
         meta = candidates[0]
         doi = meta["doi"]
     result = {"status": "ok", **meta}
-    oa_info = await oa.unpaywall(doi)
+    oa_info = await oa.open_access(doi)
     result["open_access"] = oa_info or {"is_oa": None, "note": "check skipped"}
     if meta.get("publisher_url"):
         result["proxied_url"] = config.proxied(meta["publisher_url"])
@@ -148,7 +146,7 @@ async def fetch_pdf(doi_or_url: str, filename: str | None = None) -> dict:
     name = filename or fetch.slugify_filename(meta.get("title"), meta.get("year"), doi)
 
     if doi:
-        oa_info = await oa.unpaywall(doi)
+        oa_info = await oa.open_access(doi)
         if oa_info and oa_info.get("pdf_url"):
             data = await fetch.download_open_access(oa_info["pdf_url"])
             if data:

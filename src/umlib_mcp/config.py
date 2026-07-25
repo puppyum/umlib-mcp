@@ -23,8 +23,8 @@ PROFILE_MARKER = PROFILE_DIR / ".umlib-managed"
 # itself: mode 600 inside a 700 directory, removed by logout.
 STATE_FILE = PROFILE_DIR / "session-state.json"
 
-# Contact email for the Unpaywall API (required by their terms). If unset,
-# the open-access check is skipped and only the proxy path is used.
+# Optional. Open-access lookups work without it (OpenAlex needs no contact
+# address); setting it adds Unpaywall as a second source, which requires one.
 EMAIL = os.environ.get("UMLIB_EMAIL", "")
 
 # Licensed-fetch pacing. Individual on-demand retrieval only; U-M's

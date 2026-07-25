@@ -19,7 +19,7 @@ Let Claude read papers using your own University of Michigan library access. Whe
 
 Paste this into Claude Code:
 
-> Set me up with umlib-mcp. Install uv if I don't have it, then run `claude plugin marketplace add puppyum/umlib-mcp` and `claude plugin install umlib@umlib-lab`. My email for the open-access check is you@umich.edu. Then log me into the library proxy.
+> Set me up with umlib-mcp. Install uv if I don't have it, then run `claude plugin marketplace add puppyum/umlib-mcp` and `claude plugin install umlib@umlib-lab`, and log me into the library proxy.
 
 It installs the prerequisite, adds the plugin, and opens the sign-in window for you. If the tools don't show up afterwards, run `/reload-plugins` or restart Claude Code.
 
@@ -32,9 +32,7 @@ Install [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/insta
 /plugin install umlib@umlib-lab
 ```
 
-To turn on the free-copy check, export your email in the shell that starts Claude Code: `export UMLIB_EMAIL=you@umich.edu`.
-
-Everything else is automatic: dependencies install on first launch, and the server downloads its browser (~150 MB, once per machine) in the background as soon as it starts.
+There is nothing else to configure. Dependencies install on first launch, the free-copy check works out of the box, and the server downloads its browser (~150 MB, once per machine) in the background as soon as it starts.
 
 **Claude Desktop:** Settings → Developer → Edit Config. Use an absolute path to `uvx` (find it with `which uvx`):
 
@@ -43,8 +41,7 @@ Everything else is automatic: dependencies install on first launch, and the serv
   "mcpServers": {
     "umlib": {
       "command": "/Users/YOU/.local/bin/uvx",
-      "args": ["--from", "git+https://github.com/puppyum/umlib-mcp@main", "umlib-mcp"],
-      "env": { "UMLIB_EMAIL": "you@umich.edu" }
+      "args": ["--from", "git+https://github.com/puppyum/umlib-mcp@main", "umlib-mcp"]
     }
   }
 }
@@ -67,7 +64,7 @@ Fetch papers one at a time, as you need them (it limits itself to 8 an hour). Do
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `UMLIB_EMAIL` | unset | Enables the free-copy check |
+| `UMLIB_EMAIL` | unset | Optional. Free-copy checks use OpenAlex and need no email; setting one adds Unpaywall as a second source |
 | `UMLIB_DOWNLOAD_DIR` | `~/Downloads` | Where PDFs save |
 | `UMLIB_PROFILE_DIR` | `~/.umlib/profile` | Where the session is stored |
 | `UMLIB_PROXY_BASE` | `https://proxy.lib.umich.edu/login?url=` | EZproxy prefix (change for other schools) |

@@ -42,6 +42,16 @@ def parse_crossref(message: dict) -> dict:
     }
 
 
+def parse_openalex(j: dict) -> dict:
+    oa = j.get("open_access") or {}
+    loc = j.get("best_oa_location") or {}
+    return {
+        "is_oa": bool(oa.get("is_oa")),
+        "oa_status": oa.get("oa_status"),
+        "pdf_url": loc.get("pdf_url") or None,
+    }
+
+
 def parse_unpaywall(j: dict) -> dict:
     loc = j.get("best_oa_location") or {}
     return {
@@ -86,8 +96,34 @@ async def crossref_search(query: str, rows: int = 5) -> list[dict]:
         return [parse_crossref(m) | {"score": m.get("score")} for m in items]
 
 
+async def openalex(doi: str) -> dict | None:
+    """Open-access lookup that needs no API key and no contact address."""
+    async with _client() as c:
+        r = await c.get(f"https://api.openalex.org/works/doi:{quote(doi, safe='')}")
+        if r.status_code != 200:
+            return None
+        try:
+            return parse_openalex(r.json())
+        except (ValueError, AttributeError):
+            return None
+
+
+async def open_access(doi: str) -> dict | None:
+    """Find a free copy. OpenAlex is the default because it works out of the
+    box; Unpaywall is consulted only as a fallback, and only if the user
+    supplied a contact email (its API rejects requests without one)."""
+    info = await openalex(doi)
+    if info and info.get("pdf_url"):
+        return info
+    if config.EMAIL:
+        alt = await unpaywall(doi)
+        if alt and alt.get("pdf_url"):
+            return alt
+    return info
+
+
 async def unpaywall(doi: str) -> dict | None:
-    """Open-access check. Skipped (returns None) when UMLIB_EMAIL is unset."""
+    """Secondary source. Returns None unless a contact email is configured."""
     if not config.EMAIL:
         return None
     async with _client() as c:

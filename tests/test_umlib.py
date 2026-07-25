@@ -122,6 +122,21 @@ def test_oversized_helper(monkeypatch):
     assert not fetch._oversized("not-a-number")
 
 
+def test_parse_openalex():
+    j = {
+        "open_access": {"is_oa": True, "oa_status": "diamond"},
+        "best_oa_location": {"pdf_url": "https://ojs/article/download/1"},
+    }
+    parsed = oa.parse_openalex(j)
+    assert parsed["pdf_url"] == "https://ojs/article/download/1"
+    assert parsed["is_oa"] and parsed["oa_status"] == "diamond"
+    # a paywalled record has no pdf even when a landing page exists
+    closed = oa.parse_openalex(
+        {"open_access": {"is_oa": False}, "best_oa_location": {}}
+    )
+    assert closed["pdf_url"] is None and closed["is_oa"] is False
+
+
 def test_parse_unpaywall_prefers_pdf_url():
     j = {
         "is_oa": True,
