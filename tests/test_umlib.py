@@ -179,11 +179,39 @@ def test_slugify_falls_back_to_doi_for_non_latin_titles():
     assert fetch.slugify_filename("", None, None) == "article.pdf"
 
 
-def test_malformed_numeric_env_falls_back(monkeypatch):
-    monkeypatch.setenv("UMLIB_MAX_FETCHES_PER_HOUR", "banana")
-    assert config._num("UMLIB_MAX_FETCHES_PER_HOUR", 8, int) == 8
+def test_setting_precedence_env_then_file_then_default(monkeypatch):
+    monkeypatch.setattr(config, "_FILE", {"max_fetches_per_hour": 30})
+    monkeypatch.delenv("UMLIB_MAX_FETCHES_PER_HOUR", raising=False)
+    assert (
+        config.setting("max_fetches_per_hour", 60, int) == 30
+    )  # file wins over default
+
     monkeypatch.setenv("UMLIB_MAX_FETCHES_PER_HOUR", "12")
-    assert config._num("UMLIB_MAX_FETCHES_PER_HOUR", 8, int) == 12
+    assert config.setting("max_fetches_per_hour", 60, int) == 12  # env wins over file
+
+    monkeypatch.setenv("UMLIB_MAX_FETCHES_PER_HOUR", "banana")
+    assert (
+        config.setting("max_fetches_per_hour", 60, int) == 30
+    )  # bad env falls to file
+
+    monkeypatch.setattr(config, "_FILE", {"max_fetches_per_hour": "also-bad"})
+    assert config.setting("max_fetches_per_hour", 60, int) == 60  # both bad -> default
+
+
+def test_malformed_config_file_does_not_crash(tmp_path, monkeypatch):
+    bad = tmp_path / "config.toml"
+    bad.write_text("this is not [valid toml")
+    monkeypatch.setattr(config, "CONFIG_FILE", bad)
+    assert config._load_file() == {}
+
+
+def test_shipped_defaults(monkeypatch):
+    """With nothing configured, the shipped courtesy limits apply."""
+    monkeypatch.setattr(config, "_FILE", {})
+    monkeypatch.delenv("UMLIB_MAX_FETCHES_PER_HOUR", raising=False)
+    monkeypatch.delenv("UMLIB_MIN_FETCH_INTERVAL_S", raising=False)
+    assert config.setting("max_fetches_per_hour", 60, int) == 60
+    assert config.setting("min_fetch_interval_s", 5.0, float) == 5.0
 
 
 def test_ratelimit_refund_restores_a_slot(monkeypatch):

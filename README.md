@@ -52,7 +52,7 @@ To wire it up yourself instead, run `uv tool install git+https://github.com/pupp
 }
 ```
 
-To update later: `uv tool upgrade umlib-mcp --reinstall`. Plugin installs track `@main` and refresh themselves when the server next starts.
+To update later: `uv tool upgrade umlib-mcp --reinstall` (the `--reinstall` matters; a plain upgrade can reuse a cached build). Plugin installs track `@main` and refresh themselves when the server next starts.
 
 ## Use it
 
@@ -71,19 +71,29 @@ Claude Code and Codex load the bundled skill, so they already try umlib when a p
 
 ## One rule
 
-Fetch papers one at a time, as you need them. It limits itself to 8 an hour. Please don't bulk-download reading lists: the library's [appropriate-use policy](https://lib.umich.edu/about-us/policies/statement-appropriate-use-electronic-resources) forbids systematic downloading, and publishers respond by cutting off the whole campus rather than one account. For text or data mining at scale, talk to library-ds@umich.edu.
+Fetch papers as you need them, not in bulk. The library's [appropriate-use policy](https://lib.umich.edu/about-us/policies/statement-appropriate-use-electronic-resources) forbids systematic downloading, and publishers respond by cutting off the whole campus rather than one account. The policy sets no number, so the 60-an-hour default here is our own courtesy limit: well above ordinary reading, well below anything that looks like a crawler. For text or data mining at scale, talk to library-ds@umich.edu.
 
 ## Configuration
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `UMLIB_EMAIL` | unset | Optional. Free-copy checks use OpenAlex and need no email; setting one adds Unpaywall as a second source |
-| `UMLIB_DOWNLOAD_DIR` | `~/Downloads` | Where PDFs save |
-| `UMLIB_PROFILE_DIR` | `~/.umlib/profile` | Where the session is stored |
-| `UMLIB_PROXY_BASE` | `https://proxy.lib.umich.edu/login?url=` | EZproxy prefix (change for other schools) |
-| `UMLIB_MAX_FETCHES_PER_HOUR` | `8` | Fetch cap |
+Everything has a working default. To change something, write `~/.umlib/config.toml`:
 
-Set `UMLIB_PROXY_BASE` and it works at any other EZproxy school.
+```toml
+max_fetches_per_hour = 60   # courtesy cap on licensed fetches
+min_fetch_interval_s = 5    # seconds between licensed fetches
+download_dir = "~/Papers"   # where PDFs land
+email = "you@umich.edu"     # adds Unpaywall alongside OpenAlex
+```
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `max_fetches_per_hour` | `60` | Courtesy cap on licensed fetches |
+| `min_fetch_interval_s` | `5` | Seconds between licensed fetches |
+| `email` | unset | Optional. Free-copy checks use OpenAlex and need no email; setting one adds Unpaywall as a second source |
+| `download_dir` | `~/Downloads` | Where PDFs save |
+| `profile_dir` | `~/.umlib/profile` | Where the session is stored |
+| `proxy_base` | `https://proxy.lib.umich.edu/login?url=` | EZproxy prefix |
+
+Set `proxy_base` and it works at any other EZproxy school. Every setting also reads from an environment variable (`UMLIB_MAX_FETCHES_PER_HOUR` and so on), which wins over the file; the file exists because environment variables are awkward to apply across agents. `auth_status` reports the limit in force and which file it read.
 
 ## Develop
 

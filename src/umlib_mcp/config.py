@@ -1,35 +1,59 @@
 import os
+import tomllib
 from pathlib import Path
 from urllib.parse import urlparse
 
-# EZproxy prefix. U-M documents this exact pattern as the supported public
-# interface ("Create Links that Work"). Override for other institutions.
-PROXY_BASE = os.environ.get(
-    "UMLIB_PROXY_BASE", "https://proxy.lib.umich.edu/login?url="
-)
-PROXY_HOST = urlparse(PROXY_BASE).hostname or "proxy.lib.umich.edu"
+# Settings come from ~/.umlib/config.toml, and an environment variable beats
+# the file when both are set. The file exists because environment variables
+# are awkward to apply across agents: Codex clears the environment to a fixed
+# allowlist, and Claude Desktop needs them written into JSON by hand. One file
+# changes the behaviour for every agent at once.
+CONFIG_FILE = Path(os.environ.get("UMLIB_CONFIG", "~/.umlib/config.toml")).expanduser()
 
 
-def _path(env: str, default: str) -> Path:
+def _load_file() -> dict:
+    try:
+        with open(CONFIG_FILE, "rb") as fh:
+            data = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}  # missing or malformed: fall back to defaults, never crash
+    return data if isinstance(data, dict) else {}
+
+
+_FILE = _load_file()
+
+
+def setting(key: str, default, cast=str):
+    """Resolve one setting: environment first, then the config file, then the
+    built-in default. A bad value anywhere falls through instead of raising."""
+    env = "UMLIB_" + key.upper()
+    for raw in (os.environ.get(env), _FILE.get(key)):
+        if raw is None or raw == "":
+            continue
+        try:
+            return cast(raw)
+        except (ValueError, TypeError):
+            continue
+    return default
+
+
+def _path(key: str, default: str) -> Path:
     # resolve() so a relative override becomes absolute; the logout guard and
     # the lock file both depend on knowing where this really points
-    return Path(os.environ.get(env, default)).expanduser().resolve()
+    return Path(setting(key, default)).expanduser().resolve()
 
 
-def _num(env: str, default, cast):
-    """A typo in an env var should not stop the server from starting."""
-    try:
-        return cast(os.environ[env])
-    except (KeyError, ValueError, TypeError):
-        return default
+# EZproxy prefix. U-M documents this exact pattern as the supported public
+# interface ("Create Links that Work"). Override for other institutions.
+PROXY_BASE = setting("proxy_base", "https://proxy.lib.umich.edu/login?url=")
+PROXY_HOST = urlparse(PROXY_BASE).hostname or "proxy.lib.umich.edu"
 
-
-PROFILE_DIR = _path("UMLIB_PROFILE_DIR", "~/.umlib/profile")
-DOWNLOAD_DIR = _path("UMLIB_DOWNLOAD_DIR", "~/Downloads")
+PROFILE_DIR = _path("profile_dir", "~/.umlib/profile")
+DOWNLOAD_DIR = _path("download_dir", "~/Downloads")
 
 # A file we drop inside a profile dir we created, so logout only ever deletes
 # a directory this tool owns (not, say, a user's real folder that happens to
-# sit at a custom UMLIB_PROFILE_DIR).
+# sit at a custom profile_dir).
 PROFILE_MARKER = PROFILE_DIR / ".umlib-managed"
 
 # EZproxy and Okta issue session cookies, which Chromium keeps in memory and
@@ -40,22 +64,23 @@ STATE_FILE = PROFILE_DIR / "session-state.json"
 
 # Optional. Open-access lookups work without it (OpenAlex needs no contact
 # address); setting it adds Unpaywall as a second source, which requires one.
-EMAIL = os.environ.get("UMLIB_EMAIL", "")
+EMAIL = setting("email", "")
 
-# Licensed-fetch pacing. Individual on-demand retrieval only; U-M's
-# "Appropriate Use of Electronic Resources" statement prohibits systematic
-# downloading, and publishers block on volume anomalies.
-MAX_FETCHES_PER_HOUR = _num("UMLIB_MAX_FETCHES_PER_HOUR", 8, int)
-MIN_FETCH_INTERVAL_S = _num("UMLIB_MIN_FETCH_INTERVAL_S", 20.0, float)
+# Licensed-fetch pacing. The library's appropriate-use statement bars
+# systematic downloading but sets no number, so these are our own courtesy
+# limits: comfortably above ordinary reading, far below anything that looks
+# like a crawler to a publisher.
+MAX_FETCHES_PER_HOUR = setting("max_fetches_per_hour", 60, int)
+MIN_FETCH_INTERVAL_S = setting("min_fetch_interval_s", 5.0, float)
 
 # Reject anything larger than this before saving; a PDF article is a few MB.
-MAX_PDF_BYTES = _num("UMLIB_MAX_PDF_BYTES", 100 * 1024 * 1024, int)
+MAX_PDF_BYTES = setting("max_pdf_bytes", 100 * 1024 * 1024, int)
 
-LOGIN_TIMEOUT_S = _num("UMLIB_LOGIN_TIMEOUT_S", 300, int)
+LOGIN_TIMEOUT_S = setting("login_timeout_s", 300, int)
 # How long a fetch will sit waiting for an in-flight sign-in before giving up
 # and asking the user to retry.
-LOGIN_WAIT_S = _num("UMLIB_LOGIN_WAIT_S", 150.0, float)
-CANARY_URL = os.environ.get("UMLIB_CANARY_URL", "https://www.jstor.org/")
+LOGIN_WAIT_S = setting("login_wait_s", 150.0, float)
+CANARY_URL = setting("canary_url", "https://www.jstor.org/")
 
 MGETIT_BASE = "https://mgetit.lib.umich.edu/resolve?rft_id=info:doi/"
 
