@@ -28,8 +28,9 @@ class HostNotProxied(Exception):
 # covers most publishers; the selectors cover the stragglers (ScienceDirect
 # pdfft, Wiley/T&F/SAGE/ACM doi/pdf, Springer content/pdf).
 PDF_CANDIDATE_JS = r"""() => {
+  // declared outside the try so the catch can still return what was collected
+  const out = [];
   try {
-    const out = [];
     const push = (u) => { if (u && typeof u === 'string') out.push(u); };
     const meta = document.querySelector('meta[name="citation_pdf_url"]');
     push(meta && meta.content);
@@ -59,9 +60,15 @@ PDF_CANDIDATE_JS = r"""() => {
     });
     // the catch-all goes last, after every targeted source has had its turn
     document.querySelectorAll('a[href*=".pdf"]').forEach((a) => push(a.href));
-    return [...new Set(out)];
+    // A page-side cap is not a security control - Set and slice belong to the
+    // page - but it does bound what crosses the wire. Without one a page with
+    // 200k links serialises every href into this process. Generous enough that
+    // it cannot starve the targeted selectors the way slice(0, 8) did.
+    return [...new Set(out)].slice(0, 200);
   } catch (e) {
-    return [];
+    // return what was already collected rather than throwing it away: losing
+    // every candidate is exactly what the inner catch above exists to prevent
+    try { return [...new Set(out)].slice(0, 200); } catch (e2) { return []; }
   }
 }"""
 

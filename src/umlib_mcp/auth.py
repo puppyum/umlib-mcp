@@ -101,12 +101,15 @@ async def _login_flow() -> dict:
     # out can't overwrite a successful result
     if result["authenticated"] and not browser.last_save_ok():
         # the cookies live in memory until teardown writes them; if that failed
-        # the next fetch would ask for a sign-in the user just completed
+        # the next fetch would ask for a sign-in the user just completed.
+        # _save_state fails for three different reasons and cannot tell us
+        # which, so do not assert a cause the user would then go and check.
         return {
             "authenticated": False,
             "message": (
-                f"signed in, but the session could not be written to "
-                f"{config.STATE_FILE}; check the permissions there and run login again"
+                f"the sign-in looked complete, but no session cookies were saved to "
+                f"{config.STATE_FILE}; run login again, and if it repeats check that "
+                f"directory is writable"
             ),
         }
     return result
@@ -175,6 +178,14 @@ async def clear_session_async() -> dict:
             "cleared": False,
             "message": "another agent is using the browser profile; try again in a moment",
         }
+    except OSError as e:
+        # taking the lock creates its directory, which can fail on a read-only
+        # home; that is a message, not a traceback out of the tool
+        return {
+            "cleared": False,
+            "message": f"could not take the profile lock ({e}); delete "
+            f"{config.PROFILE_DIR} by hand to clear the session",
+        }
     except BaseException:
         # cancelled while the worker was still blocking on flock: release
         # whatever it eventually takes, or the lock is stranded for good
@@ -199,6 +210,11 @@ def clear_session() -> dict:
             "message": "a browser session is in use; finish or close it first",
         }
     p = config.PROFILE_DIR
+    if not p.exists():
+        # the normal state on a fresh install and after a successful logout;
+        # the ownership guard below would call this a refusal, which reads
+        # like a safety problem rather than "there was nothing to do"
+        return {"cleared": True, "message": "no saved library session to clear"}
     home = p.home()
     # the marker alone is not enough: ensure_profile_dir() drops it wherever
     # UMLIB_PROFILE_DIR points, so a profile dir set to $HOME would otherwise

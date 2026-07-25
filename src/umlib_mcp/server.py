@@ -147,6 +147,11 @@ async def login() -> dict:
     Credentials never pass through Claude or this server; only the browser
     session cookie is kept, in a local profile owned by this user.
     """
+    # gated like the other proxy tools: without this, a proxy_base that config
+    # rejected still gets driven in the sign-in window, so the user completes a
+    # full password + MFA sign-in against it and is then told it timed out
+    if bad := _misconfigured():
+        return bad
     return auth.start_login()
 
 
@@ -175,13 +180,24 @@ async def resolve(query: str) -> dict:
     candidates = []
     if doi:
         meta = await oa.crossref_work(doi)
+        # crossref_work returns None when the service could not be reached and
+        # {} when it answered and has no such record: an empty dict is falsy
+        # but not None, so both have to be handled or a typo'd DOI sails
+        # through as a successful result carrying no metadata at all
         if meta is None:
+            return {
+                "status": "error",
+                "code": "lookup_unavailable",
+                "doi": doi,
+                "message": "could not reach the metadata service; try again in a moment",
+            }
+        if not meta:
             return {
                 "status": "error",
                 "code": "doi_not_found",
                 "doi": doi,
-                "message": "no record for that DOI (or the metadata service is "
-                "briefly unreachable); check the DOI and try again",
+                "mgetit_url": config.mgetit_url(doi),
+                "message": f"no record of {doi}; check the DOI, or search by title instead",
             }
     else:
         candidates = await oa.crossref_search(query)

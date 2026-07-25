@@ -4,17 +4,32 @@ import tomllib
 from pathlib import Path
 from urllib.parse import urlparse
 
+# Problems found while reading settings. Collected rather than raised: raising
+# at import stops the server from starting at all, and the user sees nothing
+# but their agent failing to connect. The tools report these instead.
+_PROBLEMS: list[str] = []
+
+
 # Settings come from ~/.umlib/config.toml, and an environment variable beats
 # the file when both are set. The file exists because environment variables
 # are awkward to apply across agents: Codex clears the environment to a fixed
 # allowlist, and Claude Desktop needs them written into JSON by hand. One file
 # changes the behaviour for every agent at once.
-CONFIG_FILE = Path(os.environ.get("UMLIB_CONFIG", "~/.umlib/config.toml")).expanduser()
+def _config_file() -> Path:
+    """expanduser() raises on an unknown ~user, and this runs before anything
+    else in the module, so an unusable UMLIB_CONFIG would take the server down
+    on the very first line."""
+    raw = os.environ.get("UMLIB_CONFIG", "~/.umlib/config.toml")
+    for candidate in (raw, "~/.umlib/config.toml"):
+        try:
+            return Path(candidate).expanduser()
+        except (RuntimeError, OSError, ValueError) as e:
+            if candidate == raw:
+                _PROBLEMS.append(f"UMLIB_CONFIG is not a usable path ({raw!r}: {e})")
+    return Path(".umlib-config.toml").absolute()
 
-# Problems found while reading settings. Collected rather than raised: raising
-# at import stops the server from starting at all, and the user sees nothing
-# but their agent failing to connect. The tools report these instead.
-_PROBLEMS: list[str] = []
+
+CONFIG_FILE = _config_file()
 
 
 def _load_file() -> dict:
@@ -105,7 +120,10 @@ def _path(key: str, default: str) -> Path:
                 _PROBLEMS.append(
                     f"{key} is not a usable path ({candidate!r}: {e}); using {default}"
                 )
-    return Path(default).absolute()  # last resort: no home directory at all
+    # Last resort, when even home cannot be resolved. Not Path(default), which
+    # would put a directory literally named "~" wherever the agent started.
+    _PROBLEMS.append(f"could not resolve a home directory for {key}")
+    return Path(f".umlib-{key}").absolute()
 
 
 # EZproxy prefix. U-M documents this exact pattern as the supported public
@@ -162,20 +180,6 @@ RESOLVER_BASE = setting(
 )
 
 PROFILE_DIR = _path("profile_dir", "~/.umlib/profile")
-
-
-def _lock_dir() -> Path:
-    """Where the cross-process profile lock lives. Deliberately outside
-    PROFILE_DIR, which logout deletes: flock binds to the inode, so a lock file
-    removed while held lets the next process acquire the recreated path while
-    the first still holds the old one, and both then drive the same profile."""
-    try:
-        return (Path.home() / ".umlib" / "locks").resolve()
-    except (RuntimeError, OSError):
-        return Path(".umlib-locks").absolute()
-
-
-LOCK_DIR = _lock_dir()
 
 
 def _default_download_dir() -> str:

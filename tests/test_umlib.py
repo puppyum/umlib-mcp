@@ -484,7 +484,6 @@ def test_profile_lock_lives_outside_the_deletable_profile_dir(tmp_path, monkeypa
     that tree let a waiter keep the deleted inode while the next process
     acquired the recreated file - two browsers on one profile."""
     monkeypatch.setattr(config, "PROFILE_DIR", tmp_path / "profile")
-    monkeypatch.setattr(config, "LOCK_DIR", tmp_path / "locks")
     assert not browser._lock_path().is_relative_to(config.PROFILE_DIR)
 
     fd = browser._acquire_file_lock(1.0)
@@ -505,7 +504,6 @@ def test_cancelled_pre_yield_teardown_releases_the_profile_lock(tmp_path, monkey
     import contextlib
 
     monkeypatch.setattr(config, "PROFILE_DIR", tmp_path / "profile")
-    monkeypatch.setattr(config, "LOCK_DIR", tmp_path / "locks")
 
     class SlowCtx:
         async def close(self):
@@ -696,3 +694,120 @@ def test_a_missing_doi_is_not_reported_as_a_network_problem():
         assert asyncio.run(oa.crossref_work("10.1/nope")) is None  # unreachable
     finally:
         httpx.AsyncClient.get = original
+
+
+# --- regressions found in the bcee43a fix batch itself -----------------------
+
+
+def test_resolve_distinguishes_a_missing_doi_from_an_unreachable_service():
+    """crossref_work started returning {} for a 404, but resolve still guarded
+    with `is None`, so one mistyped character produced status "ok" carrying no
+    metadata at all."""
+    import asyncio
+
+    from umlib_mcp import server
+
+    async def missing(doi):
+        return {}
+
+    async def unreachable(doi):
+        return None
+
+    original = oa.crossref_work
+    try:
+        oa.crossref_work = missing
+        out = asyncio.run(server.resolve("10.1145/3411764.3445642x"))
+        assert out["status"] == "error" and out["code"] == "doi_not_found"
+
+        oa.crossref_work = unreachable
+        out = asyncio.run(server.resolve("10.1145/3411764.3445642x"))
+        assert out["status"] == "error" and out["code"] == "lookup_unavailable"
+    finally:
+        oa.crossref_work = original
+
+
+def test_login_refuses_to_open_a_window_for_a_rejected_proxy_base(monkeypatch):
+    """login was the only proxy tool without the config gate, so the user
+    completed a full password + MFA sign-in against a base config had already
+    refused, then got told it timed out."""
+    import asyncio
+
+    from umlib_mcp import server
+
+    monkeypatch.setattr(config, "PROXY_HOST", "")
+    monkeypatch.setattr(config, "CONFIG_ERROR", "proxy_base must start with https://")
+    out = asyncio.run(server.login())
+    assert out.get("code") == "config_error"
+    assert not out.get("started")
+
+
+def test_a_sign_in_page_is_never_licensed_on_any_proxy_host(monkeypatch):
+    """Binding the auth-path exclusion to PROXY_HOST alone left the SSO
+    provider counted as licensed content whenever it sits on another subdomain
+    of the rewrite host."""
+    monkeypatch.setattr(config, "PROXY_HOST", "ezproxy.school.edu")
+    monkeypatch.setattr(config, "REWRITE_HOST", "school.edu")
+    assert not browser.is_proxied_url(
+        "https://weblogin.school.edu/idp/profile/SAML2/Redirect/SSO"
+    )
+    assert not browser.is_proxied_url("https://ezproxy.school.edu/login?url=x")
+    # a genuinely rewritten article on the same apex still counts
+    assert browser.is_proxied_url("https://www-jstor-org.school.edu/stable/1")
+
+
+def test_lock_is_shared_between_two_spellings_of_one_profile_dir(tmp_path):
+    """The lock was keyed on the profile path STRING, so on a case-insensitive
+    filesystem two servers could hold 'different' locks on one directory."""
+    real = tmp_path / "Profile"
+    real.mkdir()
+    lower = tmp_path / "profile"
+    from unittest.mock import patch
+
+    with patch.object(config, "PROFILE_DIR", real):
+        a = browser._lock_path()
+    with patch.object(config, "PROFILE_DIR", lower):
+        b = browser._lock_path()
+    # same parent directory and a name derived only from the profile's own
+    # name, so the two resolve to one inode wherever the filesystem folds case
+    assert a.parent == b.parent
+    assert a.name.lower() == b.name.lower()
+
+
+def test_lock_survives_a_profile_path_that_is_not_valid_utf8(tmp_path, monkeypatch):
+    """Hashing the path with strict utf-8 made every browser call fail on a
+    latin-1 filename, which is legal on Linux."""
+    weird = tmp_path / "weird\udcff" / "profile"
+    monkeypatch.setattr(config, "PROFILE_DIR", weird)
+    assert browser._lock_path()  # must not raise UnicodeEncodeError
+
+
+def test_unusable_umlib_config_does_not_stop_the_server_starting(monkeypatch):
+    """The one path in the module that never got the no-raise guard."""
+    import importlib
+
+    monkeypatch.setenv("UMLIB_CONFIG", "~nosuchuser12345/umlib.toml")
+    reloaded = importlib.reload(config)  # used to raise RuntimeError at import
+    assert "UMLIB_CONFIG" in reloaded.CONFIG_ERROR
+    monkeypatch.delenv("UMLIB_CONFIG", raising=False)
+    importlib.reload(config)
+
+
+def test_candidate_js_is_bounded_and_keeps_what_it_collected():
+    """Removing the page-side cap let a page serialise 200k hrefs into this
+    process; the outer catch also threw away everything already collected."""
+    js = fetch.PDF_CANDIDATE_JS
+    assert "slice(0, 200)" in js
+    # `out` must be declared outside the try, or the catch cannot reach it
+    assert js.index("const out = []") < js.index("try {")
+    assert js.count("slice(0, 200)") >= 2  # the success path and the catch
+
+
+def test_logout_with_no_session_is_not_reported_as_a_refusal(tmp_path, monkeypatch):
+    """A fresh install and a second logout both hit the ownership guard, which
+    reads like a safety problem rather than 'there was nothing to do'."""
+    from umlib_mcp import auth
+
+    monkeypatch.setattr(config, "PROFILE_DIR", tmp_path / "never-created")
+    out = auth.clear_session()
+    assert out["cleared"] is True
+    assert "refusing" not in out["message"]

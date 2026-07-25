@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 import subprocess
@@ -132,15 +131,14 @@ _held_locks: set[int] = set()
 
 
 def _lock_path():
-    # Not inside PROFILE_DIR: logout deletes that whole tree, and flock binds
-    # to the inode, so a lock removed while held lets a waiter keep the deleted
-    # inode while the next process acquires the recreated file - two Chromiums
-    # on one profile, which is the exact corruption this lock exists to stop.
-    # Not in the profile's parent either, which for a custom profile_dir may be
-    # shared. A private directory of ours, keyed by profile path so two
-    # different profiles do not queue behind each other.
-    digest = hashlib.sha256(str(config.PROFILE_DIR).encode()).hexdigest()[:16]
-    return config.LOCK_DIR / f"{digest}.lock"
+    # A sibling of the profile, not a file inside it: logout deletes that whole
+    # tree, and flock binds to the inode, so a lock removed while held lets a
+    # waiter keep the deleted inode while the next process acquires the
+    # recreated file - two Chromiums on one profile, the exact corruption this
+    # lock exists to stop. A sibling also keeps exclusion inode-based, so two
+    # processes that spell the same directory differently (a case-insensitive
+    # filesystem, a symlinked home) still land on one lock.
+    return config.PROFILE_DIR.parent / f".{config.PROFILE_DIR.name}.lock"
 
 
 def _acquire_file_lock(timeout: float | None = None):
@@ -148,10 +146,9 @@ def _acquire_file_lock(timeout: float | None = None):
     may each be running their own copy of this server. A lock file makes them
     take turns instead of corrupting the profile."""
     timeout = config.LOCK_TIMEOUT_S if timeout is None else timeout
-    # only the lock directory: creating PROFILE_DIR here would leave a stray
-    # profile behind after logout and defeat the "no session yet" fast path
-    config.LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(config.LOCK_DIR, 0o700)
+    # only the parent: creating PROFILE_DIR here would leave a stray profile
+    # behind after logout and defeat the "no session yet" fast path
+    _lock_path().parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
     deadline = time.monotonic() + timeout
     while True:
@@ -267,15 +264,21 @@ def host_of(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
 
 
+AUTH_PATHS = ("/login", "/menu/login", "/logout", "/idp/", "/adfs/", "/oauth2/")
+
+
 def is_proxied_url(url: str) -> bool:
-    """True once EZproxy has rewritten us onto a licensed host."""
+    """True once EZproxy has rewritten us onto a licensed host.
+
+    A sign-in page never counts, whichever host it is on. Binding that
+    exclusion to the proxy host alone was not enough: at an OCLC school the
+    sign-in host is a subdomain of the rewrite host, and at a school whose
+    proxy rewrites onto the campus apex the SSO provider usually lives there
+    too. Either way the sign-in page looked like licensed content, so status
+    reported a session nobody had and the login window closed before the user
+    had signed in.
+    """
     host = host_of(url)
-    # The sign-in host is checked first, and never counts as licensed content.
-    # At an OCLC school it is itself a subdomain of the rewrite host
-    # (login.school.idm.oclc.org under school.idm.oclc.org), so testing the
-    # subdomain branch first made the proxy's own login page look licensed:
-    # auth_status reported a session nobody had, and the login window closed
-    # itself before the user had signed in.
-    if host == config.PROXY_HOST:
-        return not urlparse(url).path.startswith(("/login", "/menu/login", "/logout"))
-    return host.endswith("." + config.REWRITE_HOST)
+    if host != config.PROXY_HOST and not host.endswith("." + config.REWRITE_HOST):
+        return False
+    return not urlparse(url).path.startswith(AUTH_PATHS)
