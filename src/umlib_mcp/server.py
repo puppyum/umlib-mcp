@@ -61,10 +61,10 @@ async def login() -> dict:
 
 
 @mcp.tool()
-def logout() -> dict:
+async def logout() -> dict:
     """Clear the saved library proxy session (deletes the local browser
     profile). Use when switching users or on a shared machine."""
-    return auth.clear_session()
+    return await auth.clear_session_async()
 
 
 @mcp.tool()
@@ -84,7 +84,13 @@ async def resolve(query: str) -> dict:
     if doi:
         meta = await oa.crossref_work(doi)
         if meta is None:
-            return {"status": "error", "code": "doi_not_found", "doi": doi}
+            return {
+                "status": "error",
+                "code": "doi_not_found",
+                "doi": doi,
+                "message": "no record for that DOI (or the metadata service is "
+                "briefly unreachable); check the DOI and try again",
+            }
     else:
         candidates = await oa.crossref_search(query)
         if candidates is None:

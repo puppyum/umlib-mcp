@@ -23,7 +23,13 @@ One command installs everything and registers it with whichever agents you have:
 curl -LsSf https://raw.githubusercontent.com/puppyum/umlib-mcp/main/install.sh | bash
 ```
 
-It installs [uv](https://docs.astral.sh/uv/) if you're missing it, installs the server, and writes the config for each agent it finds. Add `--dry-run` to see what it would touch before it touches anything. It backs up every file it edits.
+It installs [uv](https://docs.astral.sh/uv/) if you're missing it, installs the server, and writes the config for each agent it finds, backing up every file it edits. To see what it would touch before it touches anything:
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/puppyum/umlib-mcp/main/install.sh | bash -s -- --dry-run
+```
+
+macOS and Linux. On Windows, use WSL or register the server by hand (below).
 
 Claude Code and Codex share the same plugin marketplace, so either of them can use that instead:
 
@@ -32,11 +38,21 @@ Claude Code and Codex share the same plugin marketplace, so either of them can u
 /plugin install umlib@umlib-lab
 ```
 
-You can also just ask: *"Set me up with umlib-mcp from puppyum/umlib-mcp, then log me into the library proxy."*
+In Claude Code you can also just ask: *"Set me up with umlib-mcp: run `claude plugin marketplace add puppyum/umlib-mcp` and `claude plugin install umlib@umlib-lab`, then log me into the library proxy."*
 
-Nothing needs configuring afterwards. Dependencies install on first launch, and the browser it drives (~150 MB, once per machine) downloads in the background while you get on with things.
+Nothing needs configuring afterwards. Dependencies install on first launch, and the browser it drives (~150 MB, once per user account) downloads in the background while you get on with things.
 
-To wire it up yourself instead, run `uv tool install git+https://github.com/puppyum/umlib-mcp` and point your client at the binary that lands in `uv tool dir --bin`. It takes no arguments. Only the surrounding key changes: `mcpServers` for Cursor, Windsurf, Gemini CLI and Claude Desktop, `servers` for VS Code, `context_servers` for Zed.
+To wire it up yourself instead, run `uv tool install git+https://github.com/puppyum/umlib-mcp` and point your client at the binary that lands in `uv tool dir --bin`. It takes no arguments. Only the surrounding key changes: `mcpServers` for Cursor, Windsurf, Gemini CLI and Claude Desktop, `servers` for VS Code (which also wants `"type": "stdio"`), `context_servers` for Zed. Claude Desktop needs the absolute path, since it doesn't expand `~`:
+
+```json
+{
+  "mcpServers": {
+    "umlib": { "command": "/Users/YOU/.local/bin/umlib-mcp" }
+  }
+}
+```
+
+To update later: `uv tool upgrade umlib-mcp --reinstall`. Plugin installs track `@main` and refresh themselves when the server next starts.
 
 ## Use it
 

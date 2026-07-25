@@ -57,8 +57,11 @@ def is_web_url(url: str) -> bool:
 
 
 def proxied(url: str) -> str:
-    # EZproxy's login endpoint takes the raw target after url= (documented
-    # form); qurl-style encoding is handled downstream by EZproxy itself.
+    # The target goes in raw, exactly as the library documents it. Do not be
+    # tempted to percent-encode it: EZproxy reads everything after url=
+    # literally and does its own encoding downstream, so an encoded target
+    # arrives empty. Verified against the live proxy with a target carrying
+    # both ? and & - raw round-trips intact, encoded yields an empty qurl.
     return PROXY_BASE + url
 
 

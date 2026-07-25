@@ -25,8 +25,9 @@ async def acquire() -> None:
         now = time.monotonic()
         while _times and now - _times[0] > 3600:
             _times.popleft()
-        if len(_times) >= config.MAX_FETCHES_PER_HOUR:
-            raise RateLimited(3600 - (now - _times[0]))
+        if len(_times) >= max(1, config.MAX_FETCHES_PER_HOUR):
+            oldest = _times[0] if _times else now
+            raise RateLimited(3600 - (now - oldest))
         gap = config.MIN_FETCH_INTERVAL_S - (now - _last_fetch)
         if gap > 0:
             await asyncio.sleep(gap)

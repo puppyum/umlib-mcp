@@ -157,6 +157,16 @@ async def fetch_licensed(publisher_url: str) -> tuple[bytes, str]:
     proxied_url = config.proxied(publisher_url)
     publisher_host = browser.host_of(publisher_url)
     await ratelimit.acquire()
+    try:
+        return await _fetch_via_proxy(proxied_url, publisher_host)
+    except (NeedsLogin, HostNotProxied):
+        raise  # already refunded at the point of detection
+    except BaseException:
+        ratelimit.refund()  # browser never got us to licensed content
+        raise
+
+
+async def _fetch_via_proxy(proxied_url: str, publisher_host: str):
     async with browser.session(headless=True) as ctx:
         page = await ctx.new_page()
         downloads = []
@@ -167,8 +177,7 @@ async def fetch_licensed(publisher_url: str) -> tuple[bytes, str]:
             # a direct-PDF URL makes the browser start a download instead of
             # rendering; that only happens once we're through the proxy
             if "Download is starting" not in str(e) and "ERR_ABORTED" not in str(e):
-                ratelimit.refund()
-                raise
+                raise  # fetch_licensed refunds on the way out
         if downloads:
             data = await _read_download(downloads[0])
             if data.startswith(b"%PDF"):

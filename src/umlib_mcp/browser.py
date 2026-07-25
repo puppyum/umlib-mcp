@@ -132,7 +132,21 @@ async def session(headless: bool = True):
     # by concurrent contexts. _lock serializes within this process; the lock
     # file serializes across the other agents' server processes.
     async with _lock:
-        fd = await asyncio.to_thread(_acquire_file_lock)
+        # shield the acquire: if we are cancelled while the worker thread is
+        # still blocking on flock, the thread may go on to take the lock, and
+        # an abandoned fd would wedge every later process on this profile
+        acquiring = asyncio.create_task(asyncio.to_thread(_acquire_file_lock))
+        try:
+            fd = await asyncio.shield(acquiring)
+        except BaseException:
+            acquiring.add_done_callback(
+                lambda t: (
+                    _release_file_lock(t.result())
+                    if not t.cancelled() and t.exception() is None
+                    else None
+                )
+            )
+            raise
         try:
             ctx = await _launch(headless)
             await _restore_state(ctx)

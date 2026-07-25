@@ -123,6 +123,22 @@ def start_login() -> dict:
     }
 
 
+async def clear_session_async() -> dict:
+    """Take the same cross-process lock a fetch would, so the profile is never
+    deleted out from under another agent's running browser."""
+    try:
+        fd = await asyncio.to_thread(browser._acquire_file_lock, 10.0)
+    except TimeoutError:
+        return {
+            "cleared": False,
+            "message": "another agent is using the browser profile; try again in a moment",
+        }
+    try:
+        return clear_session()
+    finally:
+        browser._release_file_lock(fd)
+
+
 def clear_session() -> dict:
     if login_active() or browser.session_active():
         return {
