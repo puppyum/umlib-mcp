@@ -44,9 +44,17 @@ To wire it up by hand, run `uv tool install git+https://github.com/puppyum/umlib
 
 To see what the installer would touch without touching anything: `curl -LsSf https://raw.githubusercontent.com/puppyum/umlib-mcp/main/install.sh | bash -s -- --dry-run`
 
-To update: `uv tool upgrade umlib-mcp --reinstall`. The `--reinstall` matters, since a plain upgrade can reuse a cached build. Plugin installs track `@main` and refresh themselves when the server next starts.
+To update: `uv tool upgrade umlib-mcp --reinstall`. The `--reinstall` matters, since a plain upgrade can reuse a cached build. Then restart your assistant, because a running server keeps the old code until its process is replaced. Plugin installs track `@main` and refresh themselves when the server next starts.
 
 </details>
+
+## Uninstall
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/puppyum/umlib-mcp/main/uninstall.sh | bash
+```
+
+Removes the server and every registration the installer made, across all the assistants above, and deletes your saved library sign-in. Pass `--keep-session` to keep the sign-in, or `--dry-run` to see what it would touch first. It only ever removes the `umlib` entry, so other servers in the same config file are left where they are.
 
 ## Use it
 
